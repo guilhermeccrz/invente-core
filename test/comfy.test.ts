@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { executeComfy } from "../src/comfy.js";
 import { generatingProgress } from "../src/progress.js";
-import { patchWorkflow, type WorkflowManifest } from "../src/workflow.js";
+import { applyFrameSize, patchWorkflow, type WorkflowManifest } from "../src/workflow.js";
+import { loadWorkflow } from "../src/catalog.js";
 
 test("progresso sobe com o tempo e para em 90", () => {
   const started = Date.parse("2026-11-16T00:00:00.000Z");
@@ -33,6 +34,18 @@ test("patch troca prompt e seed e desconecta a imagem de exemplo", () => {
   assert.equal(patched.sample.inputs.seed, 99);
   assert.equal(patched.load, undefined);
   assert.equal(patched.encode.inputs.pixels, undefined);
+});
+
+test("dimensao escolhida entra no latent do flux e do zimage", () => {
+  const flux = loadWorkflow("flux2_t2i");
+  applyFrameSize(flux.prompt, "flux2_t2i", 1344, 768);
+  assert.equal(flux.prompt["68_47"].inputs.width, 1344);
+  assert.equal(flux.prompt["68_47"].inputs.height, 768);
+  assert.equal(flux.prompt["68_48"].inputs.width, 1344);
+  const zimage = loadWorkflow("zimage_t2i");
+  applyFrameSize(zimage.prompt, "zimage_t2i", 832, 1216);
+  assert.equal(zimage.prompt["57_13"].inputs.width, 832);
+  assert.equal(zimage.prompt["57_13"].inputs.height, 1216);
 });
 
 test("cliente espera o history e devolve o caminho no pod", async () => {

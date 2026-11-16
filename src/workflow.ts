@@ -27,6 +27,41 @@ export function patchWorkflow(
   return prompt;
 }
 
+const FRAME_NODES: Record<string, { node: string; width: string; height: string }[]> = {
+  zimage_t2i: [{ node: "57_13", width: "width", height: "height" }],
+  qwen_image_2_1_t2i: [{ node: "459_456", width: "width", height: "height" }],
+  flux2_t2i: [
+    { node: "68_47", width: "width", height: "height" },
+    { node: "68_48", width: "width", height: "height" },
+  ],
+};
+
+export const IMAGE_FRAMES = [
+  { label: "1:1 · 1024×1024", width: 1024, height: 1024 },
+  { label: "3:2 · 1216×832", width: 1216, height: 832 },
+  { label: "2:3 · 832×1216", width: 832, height: 1216 },
+  { label: "16:9 · 1344×768", width: 1344, height: 768 },
+  { label: "9:16 · 768×1344", width: 768, height: 1344 },
+] as const;
+
+export function allowedFrame(width: number, height: number): boolean {
+  return IMAGE_FRAMES.some((frame) => frame.width === width && frame.height === height);
+}
+
+export function applyFrameSize(prompt: ComfyPrompt, workflowId: string, width: number, height: number): void {
+  const targets = FRAME_NODES[workflowId];
+  if (!targets) return;
+  for (const target of targets) {
+    const node = prompt[target.node];
+    if (!node) throw new Error("workflow_invalido");
+    node.inputs[target.width] = width;
+    node.inputs[target.height] = height;
+  }
+  if (workflowId === "qwen_image_2_1_t2i" && prompt["459_452"]) {
+    prompt["459_452"].inputs.resolution = Math.max(width, height);
+  }
+}
+
 function writeInput(prompt: ComfyPrompt, target: WorkflowTarget, value: string | number): void {
   const node = prompt[target.node];
   if (!node) throw new Error("workflow_invalido");

@@ -11,11 +11,11 @@ import { hashToken, newId, newToken, readSession, signSession } from "./session.
 import { docsHtml, openApiSpec } from "./openapi.js";
 import type { Asset, Job, JobStage, Pod, Store, User } from "./store.js";
 import { swaggerFile } from "./swagger.js";
-import { patchWorkflow } from "./workflow.js";
+import { applyFrameSize, allowedFrame, IMAGE_FRAMES, patchWorkflow } from "./workflow.js";
 
 const ALLOWED_ORIGINS = new Set(["https://invente.ai", "https://www.invente.ai", "http://localhost:3000"]);
 const MAX_ITEMS = 4;
-const MAX_ACTIVE = 3;
+const MAX_ACTIVE = 4;
 const IMAGE_HOUR = 30;
 const VIDEO_HOUR = 5;
 const STAGE_LABEL: Record<JobStage, string> = {
@@ -268,6 +268,7 @@ async function listWorkflows(deps: Deps): Promise<AppResponse> {
     ...pricingHeader(rates),
     workflows: offersForPods(await deps.store.listPods(), rates),
     poll_after_ms: POLL_AFTER_MS,
+    frames: IMAGE_FRAMES,
   });
 }
 
@@ -321,6 +322,8 @@ async function createJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
         seed: item.seed ?? randomInt(1, 2 ** 47),
         image_asset_id: item.image_asset_id,
         video_asset_id: item.video_asset_id,
+        width: item.width,
+        height: item.height,
         pod_id: null,
         asset_id: null,
         error: null,
@@ -460,6 +463,7 @@ async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
     videoName,
     disconnectImage: spec.drops_image === true && !job.image_asset_id,
   });
+  if (job.width && job.height) applyFrameSize(prompt, job.workflow, job.width, job.height);
   const timeoutMs = (job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds) * 1000;
   return deps.runPod({
     baseUrl: pod.base_url,
@@ -625,18 +629,28 @@ function parseItems(body: unknown, legacy: boolean, rates: Rates): { items: Item
     const video = readNullable(entry, "video_asset_id");
     if (spec.image === "required" && !image) return { error: "asset_ausente", status: 400 };
     if (spec.video === "required" && !video) return { error: "asset_ausente", status: 400 };
-    items.push({
-      requested: choice.requested,
-      workflow: choice.workflow,
-      mode: choice.mode,
-      tokens: choice.tokens,
-      kind: choice.kind,
-      prompt,
-      seed: readSeed(entry),
-      image_asset_id: image,
-      video_asset_id: video,
-    });
+    const frame = readFrame(entry);
+    if (frame === "invalid") return { error: "dados_invalidos", status: 400 };
+    const count = readCount(entry);
+    if (count === null) return { error: "dados_invalidos", status: 400 };
+    const seed = readSeed(entry);
+    for (let index = 0; index < count; index += 1) {
+      items.push({
+        requested: choice.requested,
+        workflow: choice.workflow,
+        mode: choice.mode,
+        tokens: choice.tokens,
+        kind: choice.kind,
+        prompt,
+        seed: index === 0 ? seed : null,
+        image_asset_id: image,
+        video_asset_id: video,
+        width: frame?.width ?? null,
+        height: frame?.height ?? null,
+      });
+    }
   }
+  if (items.length > MAX_ITEMS) return { error: "dados_invalidos", status: 400 };
   return { items };
 }
 
@@ -779,6 +793,8 @@ type Item = {
   seed: number | null;
   image_asset_id: string | null;
   video_asset_id: string | null;
+  width: number | null;
+  height: number | null;
 };
 
 function readString(body: unknown, key: string): string {
@@ -789,6 +805,22 @@ function readString(body: unknown, key: string): string {
 
 function readNullable(body: unknown, key: string): string | null {
   return readString(body, key) || null;
+}
+
+function readCount(body: unknown): number | null {
+  if (!body || typeof body !== "object" || !("count" in body) || (body as Record<string, unknown>).count === undefined) return 1;
+  const value = (body as Record<string, unknown>).count;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_ITEMS) return null;
+  return value;
+}
+
+function readFrame(body: unknown): { width: number; height: number } | null | "invalid" {
+  if (!body || typeof body !== "object") return null;
+  const record = body as Record<string, unknown>;
+  if (record.width === undefined && record.height === undefined) return null;
+  if (typeof record.width !== "number" || typeof record.height !== "number") return "invalid";
+  if (!allowedFrame(record.width, record.height)) return "invalid";
+  return { width: record.width, height: record.height };
 }
 
 function readSeed(body: unknown): number | null {

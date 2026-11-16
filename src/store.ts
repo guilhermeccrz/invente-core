@@ -30,6 +30,8 @@ export type Job = {
   seed: number;
   image_asset_id: string | null;
   video_asset_id: string | null;
+  width: number | null;
+  height: number | null;
   pod_id: string | null;
   asset_id: string | null;
   error: string | null;
