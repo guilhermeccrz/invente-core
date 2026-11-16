@@ -99,6 +99,7 @@ export type Store = {
   saveAsset(asset: Asset): Promise<void>;
   findAsset(id: string): Promise<Asset | null>;
   listAssets(userId: string): Promise<Asset[]>;
+  listExpiredAssets(beforeIso: string): Promise<Asset[]>;
   deleteAsset(id: string): Promise<void>;
   adjustTokens(input: TokenAdjustment): Promise<{ balance: number } | { error: "insuficiente" | "ausente" }>;
   savePod(pod: Pod): Promise<void>;
@@ -173,6 +174,9 @@ export function memoryStore(): Store {
     },
     async listAssets(userId) {
       return assets.filter((asset) => asset.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 60);
+    },
+    async listExpiredAssets(beforeIso) {
+      return assets.filter((asset) => asset.deleted_at && asset.deleted_at <= beforeIso);
     },
     async deleteAsset(id) {
       const index = assets.findIndex((asset) => asset.id === id);

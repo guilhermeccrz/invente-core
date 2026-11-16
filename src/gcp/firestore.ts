@@ -68,6 +68,10 @@ export function firestoreStore(projectId: string): Store {
       const snap = await assets.where("user_id", "==", userId).orderBy("created_at", "desc").limit(60).get();
       return snap.docs.map((doc) => doc.data() as Asset);
     },
+    async listExpiredAssets(beforeIso) {
+      const snap = await assets.where("deleted_at", "<=", beforeIso).limit(200).get();
+      return snap.docs.map((doc) => doc.data() as Asset);
+    },
     async deleteAsset(id) {
       await assets.doc(id).delete();
     },

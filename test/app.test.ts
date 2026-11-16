@@ -371,6 +371,44 @@ test("apagar vai para a lixeira e some depois de dois dias", async () => {
   assert.equal(deps.saved.some((name) => name.startsWith("del:")), true);
 });
 
+test("cron da lixeira apaga so o que passou do prazo", async () => {
+  const deps = makeDeps();
+  deps.config = { ...deps.config, role: "worker" };
+  await deps.store.saveAsset({
+    id: "asset1234asset1234",
+    user_id: "25401d1539b28658f2c9d228180006d6",
+    created_at: "2026-11-01T00:00:00.000Z",
+    deleted_at: "2026-11-10T00:00:00.000Z",
+    object_name: "invente.ai/users/25401d1539b28658f2c9d228180006d6/images/asset1234asset1234.png",
+    content_type: "image/png",
+    job_id: "asset1234asset1234",
+    kind: "image",
+    workflow: "zimage_t2i",
+    prompt: "um gato",
+    mode: "manual",
+  });
+  const denied = await handle({
+    method: "POST",
+    path: "/v1/tasks/trash",
+    query: new URLSearchParams(),
+    headers: {},
+    body: undefined,
+    cookies: {},
+  }, deps);
+  assert.equal(denied.status, 403);
+  const cleaned = await handle({
+    method: "POST",
+    path: "/v1/tasks/trash",
+    query: new URLSearchParams(),
+    headers: { "x-inventa-cron": "lixeira" },
+    body: undefined,
+    cookies: {},
+  }, deps);
+  assert.equal(cleaned.status, 200);
+  assert.equal((cleaned.body as { removed: number }).removed, 1);
+  assert.equal(await deps.store.findAsset("asset1234asset1234"), null);
+});
+
 function post(path: string, body: unknown) {
   return { method: "POST", path, query: new URLSearchParams(), headers: {}, body, cookies: {} };
 }

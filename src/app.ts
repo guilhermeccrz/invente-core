@@ -109,7 +109,22 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/jobs") return listJobs(req, deps);
   if (method === "GET" && path.startsWith("/v1/jobs/")) return getJob(req, deps, path.slice("/v1/jobs/".length));
   if (method === "POST" && path === "/v1/tasks/jobs") return runTask(req, deps);
+  if (method === "POST" && path === "/v1/tasks/trash") return runTrash(req, deps);
   return json(404, { error: "nao_encontrado" });
+}
+
+async function runTrash(req: AppRequest, deps: Deps): Promise<AppResponse> {
+  if (deps.config.role !== "worker") return json(404, { error: "nao_encontrado" });
+  const fromQueue = req.headers["x-cloudtasks-queuename"] === deps.config.tasksQueue;
+  const fromCron = req.headers["x-inventa-cron"] === "lixeira";
+  if (!fromQueue && !fromCron) return json(403, { error: "fila_invalida" });
+  const before = new Date(deps.now().getTime() - TRASH_MS).toISOString();
+  const expired = await deps.store.listExpiredAssets(before);
+  for (const asset of expired) {
+    await deps.deleteMedia(asset.object_name);
+    await deps.store.deleteAsset(asset.id);
+  }
+  return json(200, { removed: expired.length });
 }
 
 async function register(req: AppRequest, deps: Deps): Promise<AppResponse> {
