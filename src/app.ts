@@ -94,7 +94,7 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "POST" && path === "/v1/auth/logout") return logout(req, deps);
   if (method === "POST" && path === "/v1/auth/forgot") return forgot(req, deps);
   if (method === "POST" && path === "/v1/auth/reset") return resetPassword(req, deps);
-  if (method === "GET" && path === "/v1/auth/google/start") return googleStart(deps);
+  if (method === "GET" && path === "/v1/auth/google/start") return googleStart(req, deps);
   if (method === "GET" && path === "/v1/auth/google/callback") return googleCallback(req, deps);
   if (method === "GET" && path === "/v1/me") return me(req, deps);
   if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
@@ -209,20 +209,21 @@ async function resetPassword(req: AppRequest, deps: Deps): Promise<AppResponse> 
   return json(200, { ok: true });
 }
 
-function googleStart(deps: Deps): AppResponse {
+function googleStart(req: AppRequest, deps: Deps): AppResponse {
   if (!deps.config.googleClientId) return json(503, { error: "google_nao_configurado" });
   const state = newToken();
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", deps.config.googleClientId);
-  url.searchParams.set("redirect_uri", `${deps.config.publicApiUrl}/v1/auth/google/callback`);
+  url.searchParams.set("redirect_uri", `${deps.config.publicAppUrl}/v1/auth/google/callback`);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("state", state);
+  const secure = req.headers["x-forwarded-proto"] === "https" || deps.config.publicAppUrl.startsWith("https://");
   return {
     status: 302,
     headers: {
       location: url.toString(),
-      "set-cookie": "invente_google_state=" + state + "; HttpOnly; Path=/; Max-Age=600; SameSite=Lax",
+      "set-cookie": `invente_google_state=${state}; HttpOnly; Path=/; Max-Age=600; SameSite=Lax${secure ? "; Secure" : ""}`,
     },
   };
 }

@@ -9,7 +9,7 @@ export async function exchangeGoogleCode(config: Config, code: string): Promise<
       code,
       client_id: config.googleClientId,
       client_secret: config.googleClientSecret,
-      redirect_uri: `${config.publicApiUrl}/v1/auth/google/callback`,
+      redirect_uri: `${config.publicAppUrl}/v1/auth/google/callback`,
       grant_type: "authorization_code",
     }),
   });
