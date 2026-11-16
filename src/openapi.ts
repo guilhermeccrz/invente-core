@@ -4,7 +4,7 @@ export function openApiSpec(publicApiUrl: string) {
     info: {
       title: "invente-core",
       version: "0.1.0",
-      description: "API da invente.ai. E-mail sai pelo Resend. O worker privado recebe a fila em /v1/tasks/jobs.",
+      description: "API da invente.ai. A geração devolve o job na hora. O cliente consulta GET /v1/jobs/{id} a cada 4 segundos. O progresso anda por etapa e, enquanto gera, pelo tempo decorrido, sem websocket.",
     },
     servers: [
       { url: "/", description: "Este host" },
@@ -24,6 +24,18 @@ export function openApiSpec(publicApiUrl: string) {
         erro: {
           type: "object",
           properties: { error: { type: "string" } },
+        },
+        item: {
+          type: "object",
+          required: ["workflow"],
+          properties: {
+            kind: { type: "string", enum: ["image", "video"] },
+            workflow: { type: "string" },
+            prompt: { type: "string", maxLength: 2000 },
+            seed: { type: "integer" },
+            image_asset_id: { type: "string", nullable: true },
+            video_asset_id: { type: "string", nullable: true },
+          },
         },
         credenciais: {
           type: "object",
@@ -128,17 +140,82 @@ export function openApiSpec(publicApiUrl: string) {
           responses: { "200": { description: "id e e-mail" }, "401": { description: "Sem sessão" } },
         },
       },
+      "/v1/assets": {
+        post: {
+          tags: ["gallery"],
+          summary: "Guarda uma imagem ou vídeo de referência no bucket do usuário",
+          security: [{ cookie: [] }],
+          responses: { "201": { description: "Asset criado, com media_path" }, "401": { description: "Sem sessão" } },
+        },
+      },
+      "/v1/media/{id}": {
+        get: {
+          tags: ["gallery"],
+          summary: "Devolve o arquivo do usuário autenticado",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Bytes do arquivo" }, "404": { description: "Não encontrado" } },
+        },
+      },
+      "/v1/gallery": {
+        get: {
+          tags: ["jobs"],
+          summary: "Galeria da conta. A URL assinada vale 15 minutos.",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "kind", in: "query", schema: { type: "string", enum: ["image", "video"] } }],
+          responses: { "200": { description: "Itens da galeria" }, "401": { description: "Sem sessão" } },
+        },
+      },
+      "/v1/gallery/{id}": {
+        delete: {
+          tags: ["jobs"],
+          summary: "Remove um item da galeria e o arquivo no bucket",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "204": { description: "Removido" }, "404": { description: "Não encontrado" } },
+        },
+      },
+      "/v1/workflows": {
+        get: {
+          tags: ["jobs"],
+          summary: "Catálogo ligado, com tokens e USD de cada modelo",
+          responses: { "200": { description: "Preço de lista, pacotes de referência e a interseção com os pods enabled. Cada item traz tokens, usd, gpu_usd e market_usd." } },
+        },
+      },
+      "/v1/generate": {
+        post: {
+          tags: ["jobs"],
+          summary: "Enfileira até 4 itens e devolve os jobs na hora",
+          security: [{ cookie: [] }],
+          requestBody: jsonBody({
+            type: "object",
+            required: ["items"],
+            properties: {
+              items: {
+                type: "array",
+                maxItems: 4,
+                items: { $ref: "#/components/schemas/item" },
+              },
+            },
+          }),
+          responses: {
+            "202": { description: "Jobs na fila. Consulte cada id a cada poll_after_ms." },
+            "409": { description: "Workflow sem pod" },
+            "429": { description: "Cota ou fila cheia" },
+          },
+        },
+      },
       "/v1/jobs": {
         post: {
           tags: ["jobs"],
-          summary: "Enfileira uma geração",
+          summary: "Enfileira uma geração. O mesmo contrato de um item.",
           security: [{ cookie: [] }],
           requestBody: jsonBody({
             type: "object",
             required: ["prompt"],
             properties: {
               prompt: { type: "string", maxLength: 2000 },
-              workflow: { type: "string", enum: ["zimage_t2i"] },
+              workflow: { type: "string", enum: ["zimage_t2i", "flux2_t2i", "qwen_image_2_1_t2i", "minimax_i2v", "wan_animate"] },
             },
           }),
           responses: { "202": { description: "Job na fila" }, "401": { description: "Sem sessão" } },
@@ -156,7 +233,10 @@ export function openApiSpec(publicApiUrl: string) {
           summary: "Lê um job da conta",
           security: [{ cookie: [] }],
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { description: "Job" }, "404": { description: "Não encontrado" } },
+          responses: {
+            "200": { description: "Job com stage, progress e, se done, result_url por 15 minutos" },
+            "404": { description: "Não encontrado" },
+          },
         },
       },
       "/v1/tasks/jobs": {

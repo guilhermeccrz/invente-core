@@ -7,6 +7,8 @@ test("aviso de job usa o texto da invente.ai", () => {
   const mail = renderNotice({ kind: "job_ready", to: "ana@invente.ai", jobId: "job1", link: "https://invente.ai/jobs/job1" });
   assert.equal(mail.to, "ana@invente.ai");
   assert.match(mail.subject, /invente\.ai/);
+  assert.match(mail.html, /Abrir resultado/);
+  assert.match(mail.text, /job1/);
 });
 
 test("Resend recebe a chave e nao chama o GCP", async () => {
@@ -15,9 +17,11 @@ test("Resend recebe a chave e nao chama o GCP", async () => {
     called = String(url);
     const body = JSON.parse(String(init?.body));
     assert.equal(body.to[0], "ana@invente.ai");
+    assert.equal(body.html, "<p>oi</p>");
     assert.equal((init?.headers as Record<string, string>).authorization, "Bearer re_test");
     return new Response("{}", { status: 200 });
   });
-  await mailer.send({ to: "ana@invente.ai", subject: "oi", text: "texto" });
+  await mailer.send({ to: "ana@invente.ai", subject: "oi", text: "texto", html: "<p>oi</p>" });
+  assert.match(called, /api\.resend\.com/);
   assert.equal(called, "https://api.resend.com/emails");
 });

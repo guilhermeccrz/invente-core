@@ -1,3 +1,5 @@
+import { defaultRates } from "./pricing.js";
+
 export type Role = "api" | "worker";
 export type DataBackend = "memory" | "firestore";
 
@@ -22,11 +24,15 @@ export type Config = {
   podToken: string;
   podName: string;
   dataBackend: DataBackend;
+  podUsdPerHour: number;
+  tokenUsd: number;
+  tokenMargin: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const role = env.ROLE === "worker" ? "worker" : "api";
   const backend = env.DATA_BACKEND === "firestore" ? "firestore" : "memory";
+  const rates = defaultRates(env);
   return {
     role,
     port: Number(env.PORT || 8080),
@@ -43,11 +49,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     googleClientId: env.GOOGLE_CLIENT_ID || "",
     googleClientSecret: env.GOOGLE_CLIENT_SECRET || "",
     resendApiKey: env.RESEND_API_KEY || "",
-    emailFrom: env.EMAIL_FROM || "Invente <nao-responda@invente.ai>",
+    emailFrom: env.MAIL_FROM || env.EMAIL_FROM || "Invente.AI <support@invente.ai>",
     podBaseUrl: trimSlash(env.POD_BASE_URL || ""),
     podToken: env.POD_TOKEN || "",
     podName: env.POD_NAME || "a6000-sp-1",
     dataBackend: backend,
+    podUsdPerHour: rates.podUsdPerHour,
+    tokenUsd: rates.tokenUsd,
+    tokenMargin: rates.margin,
   };
 }
 

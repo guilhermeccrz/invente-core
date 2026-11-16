@@ -12,7 +12,18 @@ export function listen(deps: Deps, port: number) {
 
 async function onRequest(req: IncomingMessage, res: ServerResponse, deps: Deps) {
   const url = new URL(req.url || "/", "http://localhost");
-  const body = await readBody(req);
+  const limit = url.pathname === "/v1/assets" ? 18_000_000 : 1_000_000;
+  let body: unknown;
+  try {
+    body = await readBody(req, limit);
+  } catch (error) {
+    if (error instanceof Error && error.message === "body grande") {
+      res.writeHead(413, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "dados_invalidos" }));
+      return;
+    }
+    throw error;
+  }
   const response = await handle(
     {
       method: req.method || "GET",
@@ -47,13 +58,13 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return cookies;
 }
 
-function readBody(req: IncomingMessage): Promise<unknown> {
+function readBody(req: IncomingMessage, limit: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (size > limit) {
         reject(new Error("body grande"));
         req.destroy();
         return;
