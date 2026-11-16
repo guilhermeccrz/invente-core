@@ -3,7 +3,9 @@ import { EmailNotConfigured, notify, type Mailer } from "./email/notify.js";
 import { objectName } from "./mediaPath.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { hashToken, newId, newToken, readSession, signSession } from "./session.js";
+import { docsHtml, openApiSpec } from "./openapi.js";
 import type { Job, Store, User } from "./store.js";
+import { swaggerFile } from "./swagger.js";
 
 const ALLOWED_WORKFLOW = "zimage_t2i";
 const ALLOWED_ORIGINS = new Set(["https://invente.ai", "https://www.invente.ai", "http://localhost:3000"]);
@@ -21,6 +23,7 @@ export type AppResponse = {
   status: number;
   body?: unknown;
   headers: Record<string, string>;
+  raw?: string;
 };
 
 export type PodResult = { bytes: Buffer; contentType: string };
@@ -53,6 +56,17 @@ export async function handle(req: AppRequest, deps: Deps): Promise<AppResponse> 
 async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const { method, path } = req;
   if (method === "GET" && path === "/health") return json(200, { ok: true, role: deps.config.role });
+  if (method === "GET" && path === "/openapi.json") {
+    return json(200, openApiSpec(deps.config.publicApiUrl));
+  }
+  if (method === "GET" && path === "/docs") {
+    return { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, raw: docsHtml };
+  }
+  if (method === "GET" && path.startsWith("/docs/")) {
+    const file = swaggerFile(path.slice("/docs/".length));
+    if (!file) return json(404, { error: "nao_encontrado" });
+    return { status: 200, headers: { "content-type": file.type }, raw: file.body };
+  }
   if (method === "POST" && path === "/v1/auth/register") return register(req, deps);
   if (method === "POST" && path === "/v1/auth/verify") return verifyEmail(req, deps);
   if (method === "POST" && path === "/v1/auth/login") return login(req, deps);

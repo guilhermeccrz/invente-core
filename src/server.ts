@@ -25,7 +25,8 @@ async function onRequest(req: IncomingMessage, res: ServerResponse, deps: Deps) 
     deps,
   );
   res.writeHead(response.status, response.headers);
-  res.end(response.body === undefined ? "" : JSON.stringify(response.body));
+  if (response.raw !== undefined) res.end(response.raw);
+  else res.end(response.body === undefined ? "" : JSON.stringify(response.body));
 }
 
 function lowerHeaders(headers: IncomingMessage["headers"]): Record<string, string> {
