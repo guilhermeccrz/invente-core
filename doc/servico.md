@@ -23,13 +23,8 @@ Ainda não há URL de Cloud Run. Quando o primeiro deploy existir, o DNS de `api
 
 ## CI e CD
 
-`npm test` passou localmente: 12 testes. O workflow `ci` roda teste e build nos pull requests. O workflow `cd` faz o mesmo em `main` e só publica a imagem se a variável `CD_ENABLED` do GitHub for `true`.
+O workflow `ci` roda teste e build em todo pull request. O workflow `cd` roda de novo no push da `main`, depois do merge, e publica a imagem.
 
-Para ligar o deploy, ainda faltam, sem chave JSON:
+A identidade é o Workload Identity `invente-github`, restrita ao repositório `guilhermeccrz/invente-core` e à branch `main`. A conta que faz o deploy é `inventa-cd`, sem chave JSON. Ela envia a imagem para `inventa` e atualiza os dois serviços.
 
-- Pool de Workload Identity do repositório `guilhermeccrz/invente-core`.
-- Conta de deploy com permissão de enviar imagem para `inventa` e atualizar os dois serviços Cloud Run.
-- Segredos `GCP_WORKLOAD_IDENTITY_PROVIDER` e `GCP_DEPLOYER_SA`.
-- Variável `CD_ENABLED=true`.
-
-O script `scripts/deploy.sh` sobe `inventa-api` pública e `inventa-worker` privada, mínimo 0 e máximo 2, com a conta `inventa-api`.
+O script `scripts/deploy.sh` sobe `inventa-api` pública e `inventa-worker` privada, mínimo 0 e máximo 2, com a conta de execução `inventa-api`.
