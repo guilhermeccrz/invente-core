@@ -18,6 +18,7 @@ const MAX_ITEMS = 4;
 const MAX_ACTIVE = 4;
 const IMAGE_HOUR = 30;
 const VIDEO_HOUR = 5;
+const TRASH_MS = 2 * 24 * 60 * 60 * 1000;
 const STAGE_LABEL: Record<JobStage, string> = {
   queued: "Na fila",
   preparing: "Preparando",
@@ -99,6 +100,7 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/me") return me(req, deps);
   if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
   if (method === "GET" && path === "/v1/gallery") return listGallery(req, deps);
+  if (method === "POST" && path.startsWith("/v1/gallery/") && path.endsWith("/restore")) return restoreGalleryItem(req, deps, path.slice("/v1/gallery/".length, -"/restore".length));
   if (method === "POST" && path === "/v1/assets") return uploadReference(req, deps);
   if (method === "GET" && path.startsWith("/v1/media/")) return readMedia(req, deps, path.slice("/v1/media/".length));
   if (method === "DELETE" && path.startsWith("/v1/gallery/")) return deleteGalleryItem(req, deps, path.slice("/v1/gallery/".length));
@@ -533,11 +535,11 @@ async function uploadAsset(deps: Deps, pod: Pod, token: string, userId: string, 
 async function validateAssets(deps: Deps, userId: string, item: Item): Promise<string | null> {
   if (item.image_asset_id) {
     const asset = await deps.store.findAsset(item.image_asset_id);
-    if (!asset || asset.user_id !== userId || asset.kind !== "image") return "asset_ausente";
+    if (!asset || asset.user_id !== userId || asset.kind !== "image" || asset.deleted_at) return "asset_ausente";
   }
   if (item.video_asset_id) {
     const asset = await deps.store.findAsset(item.video_asset_id);
-    if (!asset || asset.user_id !== userId || asset.kind !== "video") return "asset_ausente";
+    if (!asset || asset.user_id !== userId || asset.kind !== "video" || asset.deleted_at) return "asset_ausente";
   }
   return null;
 }
@@ -574,9 +576,21 @@ async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
   const kind = req.query.get("kind");
-  const assets = (await deps.store.listAssets(user.id)).filter((asset) => !kind || asset.kind === kind);
-  const items = [];
+  const trash = req.query.get("trash") === "1";
+  const now = deps.now().getTime();
+  const assets = await deps.store.listAssets(user.id);
   for (const asset of assets) {
+    if (!asset.deleted_at || Date.parse(asset.deleted_at) + TRASH_MS > now) continue;
+    await deps.deleteMedia(asset.object_name);
+    await deps.store.deleteAsset(asset.id);
+  }
+  const visible = assets.filter((asset) => {
+    if (asset.deleted_at && Date.parse(asset.deleted_at) + TRASH_MS <= now) return false;
+    if (trash) return Boolean(asset.deleted_at);
+    return !asset.deleted_at;
+  }).filter((asset) => !kind || asset.kind === kind);
+  const items = [];
+  for (const asset of visible) {
     let resultUrl: string | undefined;
     try {
       resultUrl = await deps.signMedia(asset.object_name);
@@ -590,6 +604,7 @@ async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {
       mode: asset.mode,
       prompt: asset.prompt,
       created_at: asset.created_at,
+      deleted_at: asset.deleted_at || null,
       job_id: asset.job_id,
       result_url: resultUrl,
       media_path: `/v1/media/${asset.id}`,
@@ -603,9 +618,24 @@ async function deleteGalleryItem(req: AppRequest, deps: Deps, id: string): Promi
   if (!user) return json(401, { error: "sem_sessao" });
   const asset = await deps.store.findAsset(id);
   if (!asset || asset.user_id !== user.id) return json(404, { error: "nao_encontrado" });
-  await deps.deleteMedia(asset.object_name);
-  await deps.store.deleteAsset(asset.id);
+  if (asset.deleted_at) {
+    await deps.deleteMedia(asset.object_name);
+    await deps.store.deleteAsset(asset.id);
+    return { status: 204, headers: {} };
+  }
+  asset.deleted_at = deps.now().toISOString();
+  await deps.store.saveAsset(asset);
   return { status: 204, headers: {} };
+}
+
+async function restoreGalleryItem(req: AppRequest, deps: Deps, id: string): Promise<AppResponse> {
+  const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const asset = await deps.store.findAsset(id);
+  if (!asset || asset.user_id !== user.id || !asset.deleted_at) return json(404, { error: "nao_encontrado" });
+  asset.deleted_at = null;
+  await deps.store.saveAsset(asset);
+  return json(200, { ok: true });
 }
 
 function ratesOf(config: Config): Rates {
@@ -742,11 +772,11 @@ async function uploadReference(req: AppRequest, deps: Deps): Promise<AppResponse
     job_id: assetId,
     kind: spec.kind,
     workflow: "referencia",
-    prompt: "",
+    prompt: "Referência",
     mode: "manual",
   };
   await deps.store.saveAsset(asset);
-  return json(201, { id: asset.id, kind: asset.kind, media_path: `/v1/media/${asset.id}` });
+  return json(201, { id: asset.id, kind: asset.kind, workflow: "referencia", media_path: `/v1/media/${asset.id}` });
 }
 
 async function readMedia(req: AppRequest, deps: Deps, id: string): Promise<AppResponse> {

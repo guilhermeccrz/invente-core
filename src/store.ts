@@ -52,6 +52,7 @@ export type Asset = {
   workflow: string;
   prompt: string;
   mode: "auto" | "manual";
+  deleted_at?: string | null;
 };
 
 export type TokenReason = "geracao" | "estorno" | "credito_manual";

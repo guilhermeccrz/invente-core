@@ -174,7 +174,14 @@ test("job fica na fila e o worker grava so em invente.ai", async () => {
     deps,
   );
   assert.equal(removed.status, 204);
-  assert.equal((await deps.store.listAssets(account?.id || "")).length, 0);
+  const kept = await deps.store.listAssets(account?.id || "");
+  assert.equal(kept.length, 1);
+  assert.ok(kept[0].deleted_at);
+  const after = await handle(
+    { method: "GET", path: "/v1/gallery", query: new URLSearchParams("kind=image"), headers: {}, body: undefined, cookies },
+    deps,
+  );
+  assert.equal((after.body as { items: unknown[] }).items.length, 0);
 });
 
 test("worker sem pod nao tenta de novo", async () => {
@@ -324,6 +331,44 @@ test("referencia fica no bucket do usuario e so ele le", async () => {
     cookies: {},
   }, deps);
   assert.equal(local.headers["set-cookie"]?.includes("Secure"), false);
+});
+
+test("apagar vai para a lixeira e some depois de dois dias", async () => {
+  const deps = makeDeps();
+  const userId = "25401d1539b28658f2c9d228180006d6";
+  await deps.store.saveUser({
+    id: userId,
+    email: "ana@invente.ai",
+    password_hash: null,
+    google_sub: null,
+    email_verified: true,
+    created_at: "2026-11-16T00:00:00.000Z",
+    token_balance: 0,
+  });
+  await deps.store.saveSession({ id: "sess1234sess1234", user_id: userId, expires_at: "2027-01-01T00:00:00.000Z" });
+  const cookies = { invente_session: signSession({ sid: "sess1234sess1234", exp: Date.parse("2027-01-01T00:00:00.000Z") }, "teste-sessao-secreta") };
+  await deps.store.saveAsset({
+    id: "asset1234asset1234",
+    user_id: userId,
+    created_at: "2026-11-16T00:00:00.000Z",
+    object_name: "invente.ai/users/25401d1539b28658f2c9d228180006d6/images/asset1234asset1234.png",
+    content_type: "image/png",
+    job_id: "asset1234asset1234",
+    kind: "image",
+    workflow: "zimage_t2i",
+    prompt: "um gato",
+    mode: "manual",
+  });
+  const removed = await handle({ method: "DELETE", path: "/v1/gallery/asset1234asset1234", query: new URLSearchParams(), headers: {}, body: undefined, cookies }, deps);
+  assert.equal(removed.status, 204);
+  const visible = await handle({ method: "GET", path: "/v1/gallery", query: new URLSearchParams(), headers: {}, body: undefined, cookies }, deps);
+  assert.equal((visible.body as { items: unknown[] }).items.length, 0);
+  const trash = await handle({ method: "GET", path: "/v1/gallery", query: new URLSearchParams("trash=1"), headers: {}, body: undefined, cookies }, deps);
+  assert.equal((trash.body as { items: { prompt: string }[] }).items[0].prompt, "um gato");
+  deps.now = () => new Date("2026-11-19T00:00:00.000Z");
+  const expired = await handle({ method: "GET", path: "/v1/gallery", query: new URLSearchParams("trash=1"), headers: {}, body: undefined, cookies }, deps);
+  assert.equal((expired.body as { items: unknown[] }).items.length, 0);
+  assert.equal(deps.saved.some((name) => name.startsWith("del:")), true);
 });
 
 function post(path: string, body: unknown) {
