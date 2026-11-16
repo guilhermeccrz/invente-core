@@ -140,6 +140,23 @@ export function openApiSpec(publicApiUrl: string) {
           responses: { "200": { description: "id e e-mail" }, "401": { description: "Sem sessão" } },
         },
       },
+      "/v1/assets": {
+        post: {
+          tags: ["gallery"],
+          summary: "Guarda uma imagem ou vídeo de referência no bucket do usuário",
+          security: [{ cookie: [] }],
+          responses: { "201": { description: "Asset criado, com media_path" }, "401": { description: "Sem sessão" } },
+        },
+      },
+      "/v1/media/{id}": {
+        get: {
+          tags: ["gallery"],
+          summary: "Devolve o arquivo do usuário autenticado",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { description: "Bytes do arquivo" }, "404": { description: "Não encontrado" } },
+        },
+      },
       "/v1/gallery": {
         get: {
           tags: ["jobs"],

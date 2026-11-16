@@ -289,6 +289,43 @@ test("api publica nao executa task", async () => {
   assert.equal(response.status, 404);
 });
 
+test("referencia fica no bucket do usuario e so ele le", async () => {
+  const deps = makeDeps();
+  const files = new Map<string, Buffer>();
+  deps.saveMedia = async (name, bytes) => {
+    files.set(name, bytes);
+  };
+  deps.loadMedia = async (name) => files.get(name) || Buffer.alloc(0);
+  await handle(post("/v1/auth/register", { email: "ana@invente.ai", password: "senha-forte" }), deps);
+  const token = deps.sent[0].text.match(/token=([^&\s]+)/)?.[1] || "";
+  await handle(post("/v1/auth/verify", { token }), deps);
+  const logged = await handle(post("/v1/auth/login", { email: "ana@invente.ai", password: "senha-forte" }), deps);
+  const cookies = { invente_session: cookieOf(logged.headers["set-cookie"]) };
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const uploaded = await handle({
+    ...post("/v1/assets", { kind: "image", content_type: "image/png", data_base64: png.toString("base64") }),
+    cookies,
+  }, deps);
+  assert.equal(uploaded.status, 201);
+  const body = uploaded.body as { id: string; media_path: string };
+  const savedName = [...files.keys()][0] || "";
+  assert.match(savedName, /^invente\.ai\/users\/[a-f0-9]{32}\/images\/[a-f0-9]{32}\.png$/);
+  const media = await handle({ method: "GET", path: body.media_path, query: new URLSearchParams(), headers: {}, body: undefined, cookies }, deps);
+  assert.equal(media.status, 200);
+  assert.equal(Buffer.isBuffer(media.raw) ? media.raw.length : 0, png.length);
+  const stranger = await handle({ method: "GET", path: body.media_path, query: new URLSearchParams(), headers: {}, body: undefined, cookies: {} }, deps);
+  assert.equal(stranger.status, 401);
+  const local = await handle({
+    method: "POST",
+    path: "/v1/auth/login",
+    query: new URLSearchParams(),
+    headers: { "x-forwarded-proto": "http" },
+    body: { email: "ana@invente.ai", password: "senha-forte" },
+    cookies: {},
+  }, deps);
+  assert.equal(local.headers["set-cookie"]?.includes("Secure"), false);
+});
+
 function post(path: string, body: unknown) {
   return { method: "POST", path, query: new URLSearchParams(), headers: {}, body, cookies: {} };
 }

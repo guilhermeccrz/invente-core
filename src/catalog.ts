@@ -12,13 +12,14 @@ export type CatalogItem = {
   prompt: "required" | "optional";
   image: "required" | "optional" | "no";
   video: "required" | "no";
+  drops_image?: boolean;
 };
 
 export const CATALOG: CatalogItem[] = [
   { id: "zimage_t2i", kind: "image", prompt: "required", image: "no", video: "no" },
-  { id: "flux2_t2i", kind: "image", prompt: "required", image: "no", video: "no" },
+  { id: "flux2_t2i", kind: "image", prompt: "required", image: "optional", video: "no" },
   { id: "qwen_image_2_1_t2i", kind: "image", prompt: "required", image: "no", video: "no" },
-  { id: "minimax_i2v", kind: "video", prompt: "required", image: "optional", video: "no" },
+  { id: "minimax_i2v", kind: "video", prompt: "required", image: "optional", video: "no", drops_image: true },
   { id: "wan_animate", kind: "video", prompt: "optional", image: "required", video: "required" },
 ];
 

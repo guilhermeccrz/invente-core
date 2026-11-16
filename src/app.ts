@@ -40,7 +40,7 @@ export type AppResponse = {
   status: number;
   body?: unknown;
   headers: Record<string, string>;
-  raw?: string;
+  raw?: string | Buffer;
 };
 
 export type { PodResult };
@@ -99,6 +99,8 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/me") return me(req, deps);
   if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
   if (method === "GET" && path === "/v1/gallery") return listGallery(req, deps);
+  if (method === "POST" && path === "/v1/assets") return uploadReference(req, deps);
+  if (method === "GET" && path.startsWith("/v1/media/")) return readMedia(req, deps, path.slice("/v1/media/".length));
   if (method === "DELETE" && path.startsWith("/v1/gallery/")) return deleteGalleryItem(req, deps, path.slice("/v1/gallery/".length));
   if (method === "POST" && path === "/v1/generate") return createJobs(req, deps);
   if (method === "POST" && path === "/v1/jobs") return createJobs(req, deps);
@@ -162,13 +164,13 @@ async function login(req: AppRequest, deps: Deps): Promise<AppResponse> {
     return json(401, { error: "credenciais_invalidas" });
   }
   if (!user.email_verified) return json(403, { error: "email_nao_confirmado" });
-  return openSession(user, deps);
+  return openSession(user, req, deps);
 }
 
 async function logout(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const session = await currentSession(req, deps);
   if (session) await deps.store.deleteSession(session.id);
-  return { status: 204, headers: { "set-cookie": sessionCookie("", deps, 0) } };
+  return { status: 204, headers: { "set-cookie": sessionCookie("", req, deps, 0) } };
 }
 
 async function forgot(req: AppRequest, deps: Deps): Promise<AppResponse> {
@@ -247,7 +249,7 @@ async function googleCallback(req: AppRequest, deps: Deps): Promise<AppResponse>
   user.google_sub = profile.sub;
   user.email_verified = true;
   await deps.store.saveUser(user);
-  const response = await openSession(user, deps);
+  const response = await openSession(user, req, deps);
   response.status = 302;
   response.headers.location = deps.config.publicAppUrl;
   return response;
@@ -455,7 +457,7 @@ async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
     seed: job.seed,
     imageName,
     videoName,
-    disconnectImage: spec.image === "optional" && !job.image_asset_id,
+    disconnectImage: spec.drops_image === true && !job.image_asset_id,
   });
   const timeoutMs = (job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds) * 1000;
   return deps.runPod({
@@ -559,6 +561,7 @@ function present(job: Job, now: Date) {
     error: job.error,
     mode: job.mode,
     token_cost: job.token_cost,
+    media_path: job.asset_id ? `/v1/media/${job.asset_id}` : null,
   };
 }
 
@@ -584,6 +587,7 @@ async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {
       created_at: asset.created_at,
       job_id: asset.job_id,
       result_url: resultUrl,
+      media_path: `/v1/media/${asset.id}`,
     });
   }
   return json(200, { items });
@@ -652,7 +656,7 @@ function safeReason(error: unknown): string {
   return text.replace(/bearer\s+\S+/gi, "bearer").replace(/\s+/g, " ").slice(0, 180);
 }
 
-async function openSession(user: User, deps: Deps): Promise<AppResponse> {
+async function openSession(user: User, req: AppRequest, deps: Deps): Promise<AppResponse> {
   const exp = deps.now().getTime() + 14 * 24 * 60 * 60 * 1000;
   const session = { id: newId(), user_id: user.id, expires_at: new Date(exp).toISOString() };
   await deps.store.saveSession(session);
@@ -660,7 +664,7 @@ async function openSession(user: User, deps: Deps): Promise<AppResponse> {
   return {
     status: 200,
     body: { id: user.id, email: user.email, token_balance: user.token_balance ?? 0 },
-    headers: { "set-cookie": sessionCookie(token, deps, 14 * 24 * 60 * 60) },
+    headers: { "set-cookie": sessionCookie(token, req, deps, 14 * 24 * 60 * 60) },
   };
 }
 
@@ -680,9 +684,67 @@ async function currentSession(req: AppRequest, deps: Deps) {
   return session;
 }
 
-function sessionCookie(token: string, deps: Deps, maxAge: number): string {
-  const secure = deps.config.publicApiUrl.startsWith("https://") ? "; Secure" : "";
-  return `invente_session=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+function sessionCookie(token: string, req: AppRequest, deps: Deps, maxAge: number): string {
+  const proto = req.headers["x-forwarded-proto"];
+  const secure = proto === "http" ? false : proto === "https" || deps.config.publicApiUrl.startsWith("https://");
+  return `invente_session=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? "; Secure" : ""}`;
+}
+
+const UPLOAD_LIMIT = 12 * 1024 * 1024;
+const UPLOAD_TYPES: Record<string, { kind: "image" | "video"; ext: string }> = {
+  "image/png": { kind: "image", ext: "png" },
+  "image/jpeg": { kind: "image", ext: "jpg" },
+  "image/webp": { kind: "image", ext: "webp" },
+  "video/mp4": { kind: "video", ext: "mp4" },
+  "video/webm": { kind: "video", ext: "webm" },
+};
+
+async function uploadReference(req: AppRequest, deps: Deps): Promise<AppResponse> {
+  const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const record = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+  const declared = typeof record.content_type === "string" ? record.content_type : "";
+  const spec = UPLOAD_TYPES[declared];
+  const kind = readString(record, "kind");
+  if (!spec || kind !== spec.kind) return json(400, { error: "dados_invalidos" });
+  const encoded = typeof record.data_base64 === "string" ? record.data_base64 : "";
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(encoded, "base64");
+  } catch {
+    return json(400, { error: "dados_invalidos" });
+  }
+  if (bytes.length === 0 || bytes.length > UPLOAD_LIMIT) return json(400, { error: "dados_invalidos" });
+  const assetId = newId();
+  const name = objectName(deps.config.mediaPrefix, user.id, spec.kind, assetId, spec.ext);
+  await deps.saveMedia(name, bytes, declared);
+  const asset: Asset = {
+    id: assetId,
+    user_id: user.id,
+    created_at: deps.now().toISOString(),
+    object_name: name,
+    content_type: declared,
+    job_id: assetId,
+    kind: spec.kind,
+    workflow: "referencia",
+    prompt: "",
+    mode: "manual",
+  };
+  await deps.store.saveAsset(asset);
+  return json(201, { id: asset.id, kind: asset.kind, media_path: `/v1/media/${asset.id}` });
+}
+
+async function readMedia(req: AppRequest, deps: Deps, id: string): Promise<AppResponse> {
+  const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const asset = await deps.store.findAsset(id);
+  if (!asset || asset.user_id !== user.id) return json(404, { error: "nao_encontrado" });
+  const bytes = await deps.loadMedia(asset.object_name);
+  return {
+    status: 200,
+    headers: { "content-type": asset.content_type || "application/octet-stream", "cache-control": "private, max-age=60" },
+    raw: bytes,
+  };
 }
 
 function corsHeaders(origin: string, appUrl: string): Record<string, string> {
