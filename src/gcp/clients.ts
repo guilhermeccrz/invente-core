@@ -52,6 +52,7 @@ export function taskEnqueuer(config: Config) {
       parent,
       task: {
         scheduleTime,
+        dispatchDeadline: { seconds: 1800 },
         httpRequest: {
           httpMethod: "POST",
           url: config.tasksWorkerUrl,

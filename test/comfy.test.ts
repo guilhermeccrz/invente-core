@@ -111,3 +111,46 @@ test("timeout interrompe so o prompt que estourou", async () => {
   );
   assert.equal(body, JSON.stringify({ prompt_id: "p9" }));
 });
+
+test("uma consulta lenta ao history nao cancela o prompt", async () => {
+  let polls = 0;
+  let interrupts = 0;
+  const fetchImpl = (async (url: string | URL) => {
+    const href = String(url);
+    if (href.endsWith("/prompt")) return new Response(JSON.stringify({ prompt_id: "p2" }), { status: 200 });
+    if (href.endsWith("/interrupt")) {
+      interrupts += 1;
+      return new Response("ok", { status: 200 });
+    }
+    if (href.includes("/history/p2")) {
+      polls += 1;
+      if (polls === 1) throw Object.assign(new Error("demorou"), { name: "TimeoutError" });
+      return new Response(
+        JSON.stringify({
+          p2: {
+            status: { completed: true, status_str: "success" },
+            outputs: { "9": { images: [{ filename: "flux.png", subfolder: "", type: "output" }] } },
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    if (href.includes("/view")) return new Response(Buffer.from("png"), { status: 200, headers: { "content-type": "image/png" } });
+    return new Response("no", { status: 404 });
+  }) as typeof fetch;
+  const result = await executeComfy({
+    baseUrl: "https://pod.example",
+    token: "segredo",
+    prompt: { "9": { class_type: "SaveImage", inputs: {} } },
+    timeoutMs: 20_000,
+    outputNode: "9",
+    fetchImpl,
+    sleep: async () => undefined,
+    now: (() => {
+      let clock = 0;
+      return () => (clock += 1000);
+    })(),
+  });
+  assert.equal(result.podPath, "/workspace/ComfyUI/output/flux.png");
+  assert.equal(interrupts, 0);
+});

@@ -62,21 +62,38 @@ export async function executeComfy(input: PodRun & { fetchImpl?: FetchLike; slee
   }
   await input.onAccepted?.();
   const started = now();
-  while (now() - started < input.timeoutMs) {
-    await sleep(POLL_MS);
-    const history = await fetchImpl(`${base}/history/${queued.prompt_id}`, {
-      headers: { authorization: `Bearer ${input.token}` },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (history.status === 401 || history.status === 403) throw new Error("pod_not_configured");
-    if (!history.ok) throw new Error("pod_indisponivel");
-    const entry = historyEntry(await history.json(), queued.prompt_id);
-    if (entry?.status?.status_str === "error") throw new Error(`comfy_falhou:${brief(JSON.stringify(entry.status.messages || ""))}`);
-    const file = pickFile(entry?.outputs, input.outputNode);
-    if (file && (entry?.status?.completed || entry?.status?.status_str === "success")) return download(base, input.token, file, fetchImpl);
+  try {
+    while (now() - started < input.timeoutMs) {
+      await sleep(POLL_MS);
+      let history: Response;
+      try {
+        history = await fetchImpl(`${base}/history/${queued.prompt_id}`, {
+          headers: { authorization: `Bearer ${input.token}` },
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        if (isWait(error)) continue;
+        throw error;
+      }
+      if (history.status === 401 || history.status === 403) throw new Error("pod_not_configured");
+      if (!history.ok) throw new Error("pod_indisponivel");
+      const entry = historyEntry(await history.json(), queued.prompt_id);
+      if (entry?.status?.status_str === "error") throw new Error(`comfy_falhou:${brief(JSON.stringify(entry.status.messages || ""))}`);
+      const file = pickFile(entry?.outputs, input.outputNode);
+      if (file && (entry?.status?.completed || entry?.status?.status_str === "success")) return download(base, input.token, file, fetchImpl);
+    }
+    throw new Error("comfy_timeout");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "";
+    if (!reason.startsWith("comfy_falhou")) await stopPrompt(base, input.token, queued.prompt_id, fetchImpl);
+    throw error;
   }
-  await stopPrompt(base, input.token, queued.prompt_id, fetchImpl);
-  throw new Error("comfy_timeout");
+}
+
+function isWait(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = (error as { name?: string }).name;
+  return name === "TimeoutError" || name === "AbortError";
 }
 
 async function stopPrompt(base: string, token: string, promptId: string, fetchImpl: FetchLike): Promise<void> {
