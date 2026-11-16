@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import type { Config } from "./config.js";
 import { findWorkflow, loadWorkflow } from "./catalog.js";
-import { offersForPods, resolveChoice } from "./pricing.js";
+import { offersForPods, pricingHeader, resolveChoice, type Rates } from "./pricing.js";
 import { uploadToComfy, type PodResult, type PodRun } from "./comfy.js";
 import { EmailNotConfigured, notify, type Mailer } from "./email/notify.js";
 import { objectName } from "./mediaPath.js";
@@ -260,8 +260,10 @@ async function me(req: AppRequest, deps: Deps): Promise<AppResponse> {
 }
 
 async function listWorkflows(deps: Deps): Promise<AppResponse> {
+  const rates = ratesOf(deps.config);
   return json(200, {
-    workflows: offersForPods(await deps.store.listPods()),
+    ...pricingHeader(rates),
+    workflows: offersForPods(await deps.store.listPods(), rates),
     poll_after_ms: POLL_AFTER_MS,
   });
 }
@@ -269,7 +271,7 @@ async function listWorkflows(deps: Deps): Promise<AppResponse> {
 async function createJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
-  const parsed = parseItems(req.body, req.path === "/v1/jobs");
+  const parsed = parseItems(req.body, req.path === "/v1/jobs", ratesOf(deps.config));
   if ("error" in parsed) return json(parsed.status, { error: parsed.error });
   const pods = (await deps.store.listPods()).filter((pod) => pod.enabled);
   for (const item of parsed.items) {
@@ -594,13 +596,17 @@ async function deleteGalleryItem(req: AppRequest, deps: Deps, id: string): Promi
   return { status: 204, headers: {} };
 }
 
-function parseItems(body: unknown, legacy: boolean): { items: Item[] } | { error: string; status: number } {
+function ratesOf(config: Config): Rates {
+  return { podUsdPerHour: config.podUsdPerHour, tokenUsd: config.tokenUsd, margin: config.tokenMargin };
+}
+
+function parseItems(body: unknown, legacy: boolean, rates: Rates): { items: Item[] } | { error: string; status: number } {
   const raw = readItemList(body, legacy);
   if (raw.length === 0 || raw.length > MAX_ITEMS) return { error: "dados_invalidos", status: 400 };
   const items: Item[] = [];
   for (const entry of raw) {
     const requested = readString(entry, "workflow") || (legacy ? "zimage_t2i" : "");
-    const choice = resolveChoice(requested);
+    const choice = resolveChoice(requested, rates);
     if (!choice) return { error: "workflow_invalido", status: 400 };
     const spec = choice.spec;
     const kindField = readString(entry, "kind");

@@ -161,8 +161,8 @@ export function openApiSpec(publicApiUrl: string) {
       "/v1/workflows": {
         get: {
           tags: ["jobs"],
-          summary: "Catálogo ligado neste momento",
-          responses: { "200": { description: "Interseção dos fluxos do código com os pods enabled" } },
+          summary: "Catálogo ligado, com tokens e USD de cada modelo",
+          responses: { "200": { description: "Preço de lista, pacotes de referência e a interseção com os pods enabled. Cada item traz tokens, usd, gpu_usd e market_usd." } },
         },
       },
       "/v1/generate": {

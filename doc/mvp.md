@@ -9,25 +9,31 @@ Este texto registra o que o serviço `invente-core` faz agora, por que cada esco
 - O saldo é `users.token_balance`. Cada geração debita na entrada da fila. Se a tentativa termina em erro, o valor volta. O extrato fica em `token_ledger`.
 - A galeria é `GET /v1/gallery` e `DELETE /v1/gallery/{id}`. O delete apaga o documento e o objeto debaixo de `invente.ai/`. A URL assinada dura 15 minutos.
 - Os e-mails transacionais (confirmação, senha, geração pronta, geração falhou) têm texto e HTML em `src/email/templates.ts`. O envio continua sendo o Resend, fora do GCP.
-- O modo `image_auto` e o modo `video_auto` cobram a média da tabela e executam o modelo do meio.
+- O modo `image_auto` cobra a média dos três modelos de imagem e executa o Flux 2, que é o do meio no tempo. O `video_auto` cobra a média e executa o MiniMax, porque o Wan pede foto e vídeo.
 
 ## Por que o token custa isso
 
-Não existia uma tabela antes. O número segue o tempo de GPU já medido neste pod, não um preço de mercado.
+Não existia uma tabela antes. O número agora sai de duas contas, e a geração cobra a maior.
 
-| Pedido | Roda | Tokens | Base |
-| --- | --- | --- | --- |
-| `zimage_t2i` | Z-Image | 10 | cerca de 24 s com o modelo quente |
-| `qwen_image_2_1_t2i` | Qwen Image 2.1 | 20 | modelo do meio, entre o rascunho e o Flux |
-| `flux2_t2i` | Flux 2 | 40 | cerca de 111 s quente e 371 s frio |
-| `image_auto` | Qwen Image 2.1 | 23 | média de 10, 20 e 40, arredondada |
-| `minimax_i2v` | MiniMax | 80 | vídeo de cerca de 5 s |
-| `wan_animate` | Wan Animate | 120 | foto e vídeo de entrada |
-| `video_auto` | MiniMax | 100 | média de 80 e 120 |
+O pod custa `POD_USD_PER_HOUR` (hoje US$ 0,70). Cada modelo tem uma média de segundos medida no histórico do Comfy em 16 nov 2026. O custo de GPU é `segundos / 3600 × 0,70`.
 
-O modo auto cobra a média para o preço não mudar conforme o modelo da vez. Ele executa o modelo do meio (Qwen na imagem, MiniMax no vídeo) porque é o que cabe nessa média sem puxar o Flux frio nem o Wan. A diferença de 3 tokens entre os 23 do auto de imagem e os 20 do Qwen manual é de propósito: o auto é um preço fechado, um pouco acima do modelo que ele usa hoje.
+O preço de lista é `TOKEN_USD` (hoje US$ 0,001), na faixa do token mensal do Leonardo (cerca de US$ 0,0010 a US$ 0,0014). A margem `TOKEN_MARGIN` (hoje 1,5) impede vender abaixo do custo quando o pod esfria.
 
-Dez mil tokens na conta inicial dão cerca de 434 imagens no auto, ou 100 vídeos no auto, se nada falhar. Falha devolve o valor.
+`tokens = arredondar(max(custo_gpu × margem, preço_de_mercado) / TOKEN_USD)`.
+
+| Pedido | Média | GPU | Mercado | Tokens | USD |
+| --- | --- | --- | --- | --- | --- |
+| `zimage_t2i` | 24 s | US$ 0,0047 | US$ 0,01 (fal Z-Image ~US$ 0,005/MP) | 10 | 0,010 |
+| `flux2_t2i` | 242 s | US$ 0,047 | US$ 0,03 (Flux na fal e prompt SD no Midjourney) | 71 | 0,071 |
+| `qwen_image_2_1_t2i` | 756 s | US$ 0,147 | US$ 0,04 (Alchemy / Ideogram) | 220 | 0,220 |
+| `image_auto` | média | — | média dos três | média dos tokens, roda o Flux 2 | — |
+| `minimax_i2v` | 486 s | US$ 0,095 | US$ 0,20 (fal MiniMax ~US$ 0,03–0,05/s) | 200 | 0,200 |
+| `wan_animate` | 282 s | US$ 0,055 | US$ 0,25 (motion control curto) | 250 | 0,250 |
+| `video_auto` | média | — | média dos dois | média dos tokens, roda o MiniMax | — |
+
+O Qwen só tem uma amostra e ela é longa. Enquanto não houver uma segunda corrida quente, o preço fica no custo com margem, acima do mercado. O Flux usa a média da corrida fria e da quente.
+
+Os pacotes de referência, ainda sem checkout: 1.000 tokens por US$ 1, 10.000 por US$ 9 e 30.000 por US$ 24. O consumo usa o preço de lista. O saldo continua manual.
 
 A cota antiga continua: 30 imagens e 5 vídeos por hora, no máximo 3 jobs em fila, no máximo 4 itens por pedido. O saldo não substitui essa trava.
 
@@ -67,7 +73,7 @@ O estágio vai de `Na fila` a `Preparando`, `Gerando`, `Salvando` e `Pronto`. O 
 
 - Não há cobrança, plano nem nota fiscal.
 - O DNS de `api.invente.ai` na Cloudflare continua para depois.
-- O modo auto não sorteia o modelo. Ele sempre usa o do meio e cobra a média.
+- O modo auto de imagem não sorteia. Ele sempre usa o Flux 2 e cobra a média. O de vídeo sempre usa o MiniMax.
 - Uma geração real no pod, com o arquivo novo em `/workspace/ComfyUI/output`, ainda precisa de uma rodada com o token do pod publicado no Secret Manager. Os fluxos já estão no repositório no formato da API.
 
 ## Próximos passos
@@ -75,5 +81,5 @@ O estágio vai de `Na fila` a `Preparando`, `Gerando`, `Salvando` e `Pronto`. O 
 1. Verificar `support@invente.ai` no Resend, se ainda não estiver.
 2. Publicar o segredo `inventa-pod-a6000-sp-1-token` e a ficha `pods/a6000-sp-1` se a geração ao vivo ainda responder `pod_not_configured`.
 3. Quando for a hora do pagamento, trocar o crédito manual por um webhook que grave `credito_manual` com a referência da compra. A tabela de tokens pode continuar a mesma.
-4. Se o auto passar a sortear o modelo, o preço 23 e o preço 100 viram o custo esperado, e o extrato passa a guardar qual modelo saiu.
+4. Se o auto passar a sortear o modelo, a média vira o custo esperado e o extrato passa a guardar qual modelo saiu. Uma segunda amostra quente do Qwen deve substituir os 756 s.
 5. Apontar `api.invente.ai` para o Cloud Run quando o domínio for ligado.

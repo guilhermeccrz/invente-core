@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { handle, type Deps } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { resolveChoice } from "../src/pricing.js";
 import { signSession } from "../src/session.js";
 import type { Mail } from "../src/email/notify.js";
 import { memoryStore } from "../src/store.js";
@@ -236,6 +237,8 @@ test("worker sem pod nao tenta de novo", async () => {
 
 test("modo auto cobra a media e saldo curto nao entra na fila", async () => {
   const deps = makeDeps();
+  const imageAuto = resolveChoice("image_auto")?.tokens || 0;
+  const imageRun = resolveChoice("image_auto")?.workflow;
   const userId = "abc12345abc12345";
   await deps.store.saveUser({
     id: userId,
@@ -244,7 +247,7 @@ test("modo auto cobra a media e saldo curto nao entra na fila", async () => {
     google_sub: null,
     email_verified: true,
     created_at: now.toISOString(),
-    token_balance: 23,
+    token_balance: imageAuto,
   });
   await deps.store.savePod({
     id: "a6000-sp-1",
@@ -253,7 +256,7 @@ test("modo auto cobra a media e saldo curto nao entra na fila", async () => {
     base_url: "https://pod.example",
     token_secret: "inventa-pod-a6000-sp-1-token",
     max_concurrent: 1,
-    workflows: ["zimage_t2i", "qwen_image_2_1_t2i", "minimax_i2v"],
+    workflows: ["zimage_t2i", "flux2_t2i", "qwen_image_2_1_t2i", "minimax_i2v"],
     image_timeout_seconds: 480,
     video_timeout_seconds: 900,
   });
@@ -263,8 +266,8 @@ test("modo auto cobra a media e saldo curto nao entra na fila", async () => {
   assert.equal(created.status, 202);
   const body = created.body as { jobs: { workflow: string; token_cost: number; mode: string }[]; token_balance: number };
   assert.equal(body.jobs[0].mode, "auto");
-  assert.equal(body.jobs[0].workflow, "qwen_image_2_1_t2i");
-  assert.equal(body.jobs[0].token_cost, 23);
+  assert.equal(body.jobs[0].workflow, imageRun);
+  assert.equal(body.jobs[0].token_cost, imageAuto);
   assert.equal(body.token_balance, 0);
   const denied = await handle({ ...post("/v1/generate", { items: [{ workflow: "video_auto", prompt: "um gato" }] }), cookies }, deps);
   assert.equal(denied.status, 402);
