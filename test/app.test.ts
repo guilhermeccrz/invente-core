@@ -409,6 +409,106 @@ test("cron da lixeira apaga so o que passou do prazo", async () => {
   assert.equal(await deps.store.findAsset("asset1234asset1234"), null);
 });
 
+test("placa ocupada devolve 503 se nao conseguir remarcar o job", async () => {
+  const deps = makeDeps({
+    enqueue: async () => "skipped",
+  });
+  await handle(post("/v1/auth/register", { email: "ana@invente.ai", password: "senha-forte" }), deps);
+  const token = deps.sent[0].text.match(/token=([^&\s]+)/)?.[1] || "";
+  await handle(post("/v1/auth/verify", { token }), deps);
+  const logged = await handle(post("/v1/auth/login", { email: "ana@invente.ai", password: "senha-forte" }), deps);
+  const cookies = { invente_session: cookieOf(logged.headers["set-cookie"]) };
+  const account = await deps.store.findUserByEmail("ana@invente.ai");
+  if (account) {
+    account.token_balance = 10000;
+    await deps.store.saveUser(account);
+  }
+  await deps.store.savePod({
+    id: "a6000-sp-1",
+    name: "a6000-sp-1",
+    enabled: true,
+    base_url: "https://pod.example",
+    token_secret: "inventa-pod-a6000-sp-1-token",
+    max_concurrent: 1,
+    workflows: ["zimage_t2i"],
+    image_timeout_seconds: 480,
+    video_timeout_seconds: 900,
+  });
+  const created = await handle({ ...post("/v1/jobs", { prompt: "um gato", workflow: "zimage_t2i" }), cookies }, deps);
+  const jobId = (created.body as { jobs: { id: string }[] }).jobs[0].id;
+  const stored = await deps.store.findJob(jobId);
+  if (!stored) throw new Error("job ausente");
+  stored.status = "running";
+  stored.pod_id = "a6000-sp-1";
+  await deps.store.saveJob(stored);
+  const second = await handle({ ...post("/v1/jobs", { prompt: "outro gato", workflow: "zimage_t2i" }), cookies }, deps);
+  const waitingId = (second.body as { jobs: { id: string }[] }).jobs[0].id;
+  deps.config = { ...deps.config, role: "worker" };
+  const response = await handle({
+    method: "POST",
+    path: "/v1/tasks/jobs",
+    query: new URLSearchParams(),
+    headers: { "x-cloudtasks-queuename": "inventa-jobs" },
+    body: { jobId: waitingId },
+    cookies: {},
+  }, deps);
+  assert.equal(response.status, 503);
+  assert.equal((await deps.store.findJob(waitingId))?.status, "queued");
+});
+
+test("flux sem foto entra na mesma maquina e nao vira outro modelo na lista", async () => {
+  const deps = makeDeps();
+  const userId = "abc12345abc12345";
+  await deps.store.saveUser({
+    id: userId,
+    email: "ana@invente.ai",
+    password_hash: null,
+    google_sub: null,
+    email_verified: true,
+    created_at: now.toISOString(),
+    token_balance: 10000,
+  });
+  await deps.store.savePod({
+    id: "a6000-sp-1",
+    name: "a6000-sp-1",
+    enabled: true,
+    base_url: "https://pod.example",
+    token_secret: "inventa-pod-a6000-sp-1-token",
+    max_concurrent: 1,
+    workflows: ["flux2_t2i"],
+    image_timeout_seconds: 480,
+    video_timeout_seconds: 900,
+  });
+  await deps.store.saveSession({ id: "sess1234sess1234", user_id: userId, expires_at: "2027-01-01T00:00:00.000Z" });
+  const cookies = { invente_session: signSession({ sid: "sess1234sess1234", exp: Date.parse("2027-01-01T00:00:00.000Z") }, "teste-sessao-secreta") };
+  const listed = await handle({ method: "GET", path: "/v1/workflows", query: new URLSearchParams(), headers: {}, body: undefined, cookies }, deps);
+  const offers = (listed.body as { workflows: { id: string; label: string }[] }).workflows;
+  assert.equal(offers.filter((item) => item.label === "Flux 2").length, 1);
+  assert.equal(offers.some((item) => item.id === "flux2_text_t2i"), false);
+  const created = await handle({ ...post("/v1/generate", { items: [{ workflow: "flux2_text_t2i", prompt: "um gato", kind: "image" }] }), cookies }, deps);
+  assert.equal(created.status, 202);
+  const body = created.body as { jobs: { workflow: string; token_cost: number }[] };
+  assert.equal(body.jobs[0].workflow, "flux2_text_t2i");
+  assert.equal(body.jobs[0].token_cost, resolveChoice("flux2_t2i")?.tokens);
+  const prompted: { class_type: string }[] = [];
+  deps.runPod = async (input) => {
+    prompted.push(...Object.values(input.prompt));
+    return { bytes: Buffer.from("png"), contentType: "image/png", podPath: "/workspace/ComfyUI/output/Flux2_dev_00001_.png" };
+  };
+  deps.config = { ...deps.config, role: "worker" };
+  const done = await handle({
+    method: "POST",
+    path: "/v1/tasks/jobs",
+    query: new URLSearchParams(),
+    headers: { "x-cloudtasks-queuename": "inventa-jobs" },
+    body: { jobId: body.jobs[0].id },
+    cookies: {},
+  }, deps);
+  assert.equal(done.status, 200);
+  assert.equal(prompted.some((node) => node.class_type === "LoadImage"), false);
+  assert.equal(prompted.some((node) => node.class_type === "UNETLoader"), true);
+});
+
 function post(path: string, body: unknown) {
   return { method: "POST", path, query: new URLSearchParams(), headers: {}, body, cookies: {} };
 }

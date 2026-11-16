@@ -151,6 +151,12 @@ export function quoteAuto(kind: MediaKind, rates: Rates = defaultRates()): Quote
 }
 
 export function resolveChoice(id: string, rates: Rates = defaultRates()): ResolvedChoice | null {
+  if (id === "flux2_text_t2i") {
+    const base = resolveChoice("flux2_t2i", rates);
+    const spec = findWorkflow(id);
+    if (!base || !spec) return null;
+    return { ...base, requested: id, workflow: id, spec };
+  }
   const quote = id === "image_auto" || id === "video_auto"
     ? quoteAuto(id === "image_auto" ? "image" : "video", rates)
     : isModel(id) ? quoteModel(id, rates) : null;

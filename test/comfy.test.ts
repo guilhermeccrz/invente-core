@@ -3,7 +3,7 @@ import test from "node:test";
 import { executeComfy } from "../src/comfy.js";
 import { generatingProgress } from "../src/progress.js";
 import { applyFrameSize, patchWorkflow, type WorkflowManifest } from "../src/workflow.js";
-import { loadWorkflow } from "../src/catalog.js";
+import { executionWorkflow, loadWorkflow } from "../src/catalog.js";
 
 test("progresso sobe com o tempo e para em 90", () => {
   const started = Date.parse("2026-11-16T00:00:00.000Z");
@@ -34,6 +34,23 @@ test("patch troca prompt e seed e desconecta a imagem de exemplo", () => {
   assert.equal(patched.sample.inputs.seed, 99);
   assert.equal(patched.load, undefined);
   assert.equal(patched.encode.inputs.pixels, undefined);
+});
+
+test("flux sem imagem usa o grafo de texto e com imagem usa o de referencia", () => {
+  assert.equal(executionWorkflow("flux2_t2i", false), "flux2_text_t2i");
+  assert.equal(executionWorkflow("flux2_text_t2i", false), "flux2_text_t2i");
+  assert.equal(executionWorkflow("flux2_t2i", true), "flux2_t2i");
+  assert.equal(executionWorkflow("flux2_text_t2i", true), "flux2_t2i");
+  assert.equal(executionWorkflow("zimage_t2i", false), "zimage_t2i");
+  const text = loadWorkflow("flux2_text_t2i");
+  assert.equal(text.manifest.load_image, null);
+  assert.equal(text.prompt["98_12"].inputs.unet_name, "flux2_dev_fp8mixed.safetensors");
+  applyFrameSize(text.prompt, "flux2_text_t2i", 1344, 768);
+  assert.equal(text.prompt["98_47"].inputs.width, 1344);
+  assert.equal(text.prompt["98_48"].inputs.height, 768);
+  const edit = loadWorkflow("flux2_t2i");
+  assert.equal(edit.prompt["46"].class_type, "LoadImage");
+  assert.equal(edit.prompt["98_12"], undefined);
 });
 
 test("dimensao escolhida entra no latent do flux e do zimage", () => {

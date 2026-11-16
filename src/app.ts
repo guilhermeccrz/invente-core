@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import type { Config } from "./config.js";
-import { findWorkflow, loadWorkflow } from "./catalog.js";
+import { executionWorkflow, findWorkflow, loadWorkflow, podRuns } from "./catalog.js";
 import { offersForPods, pricingHeader, resolveChoice, type Rates } from "./pricing.js";
 import { uploadToComfy, type PodResult, type PodRun } from "./comfy.js";
 import { EmailNotConfigured, notify, type Mailer } from "./email/notify.js";
@@ -296,7 +296,7 @@ async function createJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if ("error" in parsed) return json(parsed.status, { error: parsed.error });
   const pods = (await deps.store.listPods()).filter((pod) => pod.enabled);
   for (const item of parsed.items) {
-    if (!pods.some((pod) => pod.workflows.includes(item.workflow))) return json(409, { error: "workflow_indisponivel" });
+    if (!pods.some((pod) => podRuns(pod.workflows, item.workflow))) return json(409, { error: "workflow_indisponivel" });
     const assetError = await validateAssets(deps, user.id, item);
     if (assetError) return json(400, { error: assetError });
   }
@@ -379,6 +379,13 @@ async function getJob(req: AppRequest, deps: Deps, id: string): Promise<AppRespo
   if (!user) return json(401, { error: "sem_sessao" });
   const job = await deps.store.findJob(id);
   if (!job || job.user_id !== user.id) return json(404, { error: "nao_encontrado" });
+  if (job.status === "queued" && deps.now().getTime() - Date.parse(job.updated_at) > 60_000) {
+    const again = await deps.enqueue(job.id);
+    if (again === "sent") {
+      job.updated_at = deps.now().toISOString();
+      await deps.store.saveJob(job);
+    }
+  }
   let resultUrl: string | undefined;
   if (job.status === "done" && job.asset_id) {
     const asset = await deps.store.findAsset(job.asset_id);
@@ -399,11 +406,12 @@ async function runTask(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const jobId = readString(req.body, "jobId");
   const job = jobId ? await deps.store.findJob(jobId) : null;
   if (!job || job.status === "done" || job.status === "error" || job.status === "running") return json(200, { ok: true, ignored: true });
-  const pod = (await deps.store.listPods()).find((item) => item.enabled && item.workflows.includes(job.workflow));
+  const pod = (await deps.store.listPods()).find((item) => item.enabled && podRuns(item.workflows, job.workflow));
   if (!pod) return failJob(job, deps, "pod_not_configured", true);
   const claim = await deps.store.claimJob(job.id, pod.id, pod.max_concurrent);
   if (claim === "busy") {
-    await deps.enqueue(job.id, 30);
+    const again = await deps.enqueue(job.id, 30);
+    if (again !== "sent") return json(503, { error: "fila_ocupada" });
     return json(200, { ok: true, delayed: true });
   }
   if (claim !== "claimed") return json(200, { ok: true, ignored: true });
@@ -460,9 +468,10 @@ async function runTask(req: AppRequest, deps: Deps): Promise<AppResponse> {
 }
 
 async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
-  const spec = findWorkflow(job.workflow);
+  const graph = executionWorkflow(job.workflow, Boolean(job.image_asset_id));
+  const spec = findWorkflow(graph);
   if (!spec) throw new Error("workflow_invalido");
-  const loaded = loadWorkflow(job.workflow);
+  const loaded = loadWorkflow(graph);
   const token = await deps.readPodToken(pod.token_secret);
   if (!token) throw new Error("pod_not_configured");
   let imageName: string | null = null;
@@ -480,7 +489,7 @@ async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
     videoName,
     disconnectImage: spec.drops_image === true && !job.image_asset_id,
   });
-  if (job.width && job.height) applyFrameSize(prompt, job.workflow, job.width, job.height);
+  if (job.width && job.height) applyFrameSize(prompt, graph, job.width, job.height);
   const timeoutMs = (job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds) * 1000;
   return deps.runPod({
     baseUrl: pod.base_url,

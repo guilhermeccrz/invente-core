@@ -34,6 +34,10 @@ const FRAME_NODES: Record<string, { node: string; width: string; height: string 
     { node: "68_47", width: "width", height: "height" },
     { node: "68_48", width: "width", height: "height" },
   ],
+  flux2_text_t2i: [
+    { node: "98_47", width: "width", height: "height" },
+    { node: "98_48", width: "width", height: "height" },
+  ],
 };
 
 export const IMAGE_FRAMES = [

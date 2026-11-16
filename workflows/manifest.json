@@ -17,6 +17,24 @@
     "load_video": null,
     "output_node": "9"
   },
+  "flux2_text_t2i": {
+    "kind": "image",
+    "prompt": [
+      {
+        "node": "98_6",
+        "input": "text"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "98_25",
+        "input": "noise_seed"
+      }
+    ],
+    "load_image": null,
+    "load_video": null,
+    "output_node": "9"
+  },
   "flux2_t2i": {
     "kind": "image",
     "prompt": [
