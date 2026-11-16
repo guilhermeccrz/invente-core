@@ -1,8 +1,10 @@
 const BLOCKED = new Set(["1900", "1900-backoffice", "commcor", "commcor-backoffice-titles"]);
 
-export function objectName(prefix: string, userId: string, assetId: string, ext = "png"): string {
+export function objectName(prefix: string, userId: string, kind: "image" | "video", assetId: string, ext?: string): string {
   const safePrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
-  const name = `${safePrefix}users/${assertId(userId)}/assets/${assertId(assetId)}.${assertExt(ext)}`;
+  const folder = kind === "video" ? "videos" : "images";
+  const extension = ext || (kind === "video" ? "mp4" : "png");
+  const name = `${safePrefix}users/${assertId(userId)}/${folder}/${assertId(assetId)}.${assertExt(extension)}`;
   assertSafeObjectName(name, safePrefix);
   return name;
 }

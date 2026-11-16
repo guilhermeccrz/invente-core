@@ -4,7 +4,7 @@ export function openApiSpec(publicApiUrl: string) {
     info: {
       title: "invente-core",
       version: "0.1.0",
-      description: "API da invente.ai. E-mail sai pelo Resend. O worker privado recebe a fila em /v1/tasks/jobs.",
+      description: "API da invente.ai. A geração devolve o job na hora. O cliente consulta GET /v1/jobs/{id} a cada 4 segundos. O progresso anda por etapa e, enquanto gera, pelo tempo decorrido, sem websocket.",
     },
     servers: [
       { url: "/", description: "Este host" },
@@ -24,6 +24,18 @@ export function openApiSpec(publicApiUrl: string) {
         erro: {
           type: "object",
           properties: { error: { type: "string" } },
+        },
+        item: {
+          type: "object",
+          required: ["workflow"],
+          properties: {
+            kind: { type: "string", enum: ["image", "video"] },
+            workflow: { type: "string" },
+            prompt: { type: "string", maxLength: 2000 },
+            seed: { type: "integer" },
+            image_asset_id: { type: "string", nullable: true },
+            video_asset_id: { type: "string", nullable: true },
+          },
         },
         credenciais: {
           type: "object",
@@ -128,17 +140,65 @@ export function openApiSpec(publicApiUrl: string) {
           responses: { "200": { description: "id e e-mail" }, "401": { description: "Sem sessão" } },
         },
       },
+      "/v1/gallery": {
+        get: {
+          tags: ["jobs"],
+          summary: "Galeria da conta. A URL assinada vale 15 minutos.",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "kind", in: "query", schema: { type: "string", enum: ["image", "video"] } }],
+          responses: { "200": { description: "Itens da galeria" }, "401": { description: "Sem sessão" } },
+        },
+      },
+      "/v1/gallery/{id}": {
+        delete: {
+          tags: ["jobs"],
+          summary: "Remove um item da galeria e o arquivo no bucket",
+          security: [{ cookie: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "204": { description: "Removido" }, "404": { description: "Não encontrado" } },
+        },
+      },
+      "/v1/workflows": {
+        get: {
+          tags: ["jobs"],
+          summary: "Catálogo ligado neste momento",
+          responses: { "200": { description: "Interseção dos fluxos do código com os pods enabled" } },
+        },
+      },
+      "/v1/generate": {
+        post: {
+          tags: ["jobs"],
+          summary: "Enfileira até 4 itens e devolve os jobs na hora",
+          security: [{ cookie: [] }],
+          requestBody: jsonBody({
+            type: "object",
+            required: ["items"],
+            properties: {
+              items: {
+                type: "array",
+                maxItems: 4,
+                items: { $ref: "#/components/schemas/item" },
+              },
+            },
+          }),
+          responses: {
+            "202": { description: "Jobs na fila. Consulte cada id a cada poll_after_ms." },
+            "409": { description: "Workflow sem pod" },
+            "429": { description: "Cota ou fila cheia" },
+          },
+        },
+      },
       "/v1/jobs": {
         post: {
           tags: ["jobs"],
-          summary: "Enfileira uma geração",
+          summary: "Enfileira uma geração. O mesmo contrato de um item.",
           security: [{ cookie: [] }],
           requestBody: jsonBody({
             type: "object",
             required: ["prompt"],
             properties: {
               prompt: { type: "string", maxLength: 2000 },
-              workflow: { type: "string", enum: ["zimage_t2i"] },
+              workflow: { type: "string", enum: ["zimage_t2i", "flux2_t2i", "qwen_image_2_1_t2i", "minimax_i2v", "wan_animate"] },
             },
           }),
           responses: { "202": { description: "Job na fila" }, "401": { description: "Sem sessão" } },
@@ -156,7 +216,10 @@ export function openApiSpec(publicApiUrl: string) {
           summary: "Lê um job da conta",
           security: [{ cookie: [] }],
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { description: "Job" }, "404": { description: "Não encontrado" } },
+          responses: {
+            "200": { description: "Job com stage, progress e, se done, result_url por 15 minutos" },
+            "404": { description: "Não encontrado" },
+          },
         },
       },
       "/v1/tasks/jobs": {

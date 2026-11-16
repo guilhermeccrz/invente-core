@@ -1,14 +1,31 @@
+import { randomInt } from "node:crypto";
 import type { Config } from "./config.js";
+import { findWorkflow, loadWorkflow } from "./catalog.js";
+import { offersForPods, resolveChoice } from "./pricing.js";
+import { uploadToComfy, type PodResult, type PodRun } from "./comfy.js";
 import { EmailNotConfigured, notify, type Mailer } from "./email/notify.js";
 import { objectName } from "./mediaPath.js";
 import { hashPassword, verifyPassword } from "./password.js";
+import { POLL_AFTER_MS, generatingProgress } from "./progress.js";
 import { hashToken, newId, newToken, readSession, signSession } from "./session.js";
 import { docsHtml, openApiSpec } from "./openapi.js";
-import type { Job, Store, User } from "./store.js";
+import type { Asset, Job, JobStage, Pod, Store, User } from "./store.js";
 import { swaggerFile } from "./swagger.js";
+import { patchWorkflow } from "./workflow.js";
 
-const ALLOWED_WORKFLOW = "zimage_t2i";
 const ALLOWED_ORIGINS = new Set(["https://invente.ai", "https://www.invente.ai", "http://localhost:3000"]);
+const MAX_ITEMS = 4;
+const MAX_ACTIVE = 3;
+const IMAGE_HOUR = 30;
+const VIDEO_HOUR = 5;
+const STAGE_LABEL: Record<JobStage, string> = {
+  queued: "Na fila",
+  preparing: "Preparando",
+  generating: "Gerando",
+  saving: "Salvando",
+  done: "Pronto",
+  error: "Falhou",
+};
 
 export type AppRequest = {
   method: string;
@@ -26,7 +43,7 @@ export type AppResponse = {
   raw?: string;
 };
 
-export type PodResult = { bytes: Buffer; contentType: string };
+export type { PodResult };
 
 export type Deps = {
   config: Config;
@@ -34,7 +51,11 @@ export type Deps = {
   mailer: Mailer;
   now: () => Date;
   enqueue: (jobId: string) => Promise<"sent" | "skipped">;
-  runPod: (input: { workflow: string; prompt: string; jobId: string }) => Promise<PodResult>;
+  runPod: (input: PodRun) => Promise<PodResult>;
+  readPodToken: (secretName: string) => Promise<string>;
+  loadMedia: (name: string) => Promise<Buffer>;
+  signMedia: (name: string) => Promise<string>;
+  deleteMedia: (name: string) => Promise<void>;
   saveMedia: (name: string, bytes: Buffer, contentType: string) => Promise<void>;
   exchangeGoogleCode: (code: string) => Promise<{ sub: string; email: string }>;
 };
@@ -76,7 +97,11 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/auth/google/start") return googleStart(deps);
   if (method === "GET" && path === "/v1/auth/google/callback") return googleCallback(req, deps);
   if (method === "GET" && path === "/v1/me") return me(req, deps);
-  if (method === "POST" && path === "/v1/jobs") return createJob(req, deps);
+  if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
+  if (method === "GET" && path === "/v1/gallery") return listGallery(req, deps);
+  if (method === "DELETE" && path.startsWith("/v1/gallery/")) return deleteGalleryItem(req, deps, path.slice("/v1/gallery/".length));
+  if (method === "POST" && path === "/v1/generate") return createJobs(req, deps);
+  if (method === "POST" && path === "/v1/jobs") return createJobs(req, deps);
   if (method === "GET" && path === "/v1/jobs") return listJobs(req, deps);
   if (method === "GET" && path.startsWith("/v1/jobs/")) return getJob(req, deps, path.slice("/v1/jobs/".length));
   if (method === "POST" && path === "/v1/tasks/jobs") return runTask(req, deps);
@@ -95,6 +120,7 @@ async function register(req: AppRequest, deps: Deps): Promise<AppResponse> {
     google_sub: null,
     email_verified: false,
     created_at: deps.now().toISOString(),
+    token_balance: 0,
   };
   const token = newToken();
   const tokenDoc = {
@@ -214,8 +240,10 @@ async function googleCallback(req: AppRequest, deps: Deps): Promise<AppResponse>
       google_sub: profile.sub,
       email_verified: true,
       created_at: deps.now().toISOString(),
+      token_balance: 0,
     };
   }
+  user.token_balance = user.token_balance ?? 0;
   user.google_sub = profile.sub;
   user.email_verified = true;
   await deps.store.saveUser(user);
@@ -228,36 +256,97 @@ async function googleCallback(req: AppRequest, deps: Deps): Promise<AppResponse>
 async function me(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
-  return json(200, { id: user.id, email: user.email });
+  return json(200, { id: user.id, email: user.email, token_balance: user.token_balance ?? 0 });
 }
 
-async function createJob(req: AppRequest, deps: Deps): Promise<AppResponse> {
+async function listWorkflows(deps: Deps): Promise<AppResponse> {
+  return json(200, {
+    workflows: offersForPods(await deps.store.listPods()),
+    poll_after_ms: POLL_AFTER_MS,
+  });
+}
+
+async function createJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
-  const prompt = readString(req.body, "prompt");
-  const workflow = readString(req.body, "workflow") || ALLOWED_WORKFLOW;
-  if (!prompt || prompt.length > 2000) return json(400, { error: "prompt_invalido" });
-  if (workflow !== ALLOWED_WORKFLOW) return json(400, { error: "workflow_invalido" });
-  const job: Job = {
-    id: newId(),
-    user_id: user.id,
-    status: "queued",
-    created_at: deps.now().toISOString(),
-    prompt,
-    workflow,
-    pod_id: null,
-    asset_id: null,
-    error: null,
-  };
-  await deps.store.saveJob(job);
-  const delivery = await deps.enqueue(job.id);
-  return json(202, { ...job, delivery });
+  const parsed = parseItems(req.body, req.path === "/v1/jobs");
+  if ("error" in parsed) return json(parsed.status, { error: parsed.error });
+  const pods = (await deps.store.listPods()).filter((pod) => pod.enabled);
+  for (const item of parsed.items) {
+    if (!pods.some((pod) => pod.workflows.includes(item.workflow))) return json(409, { error: "workflow_indisponivel" });
+    const assetError = await validateAssets(deps, user.id, item);
+    if (assetError) return json(400, { error: assetError });
+  }
+  const latest = await deps.store.listJobs(user.id);
+  const active = latest.filter((job) => job.status === "queued" || job.status === "running");
+  if (active.length + parsed.items.length > MAX_ACTIVE) return json(429, { error: "fila_cheia" });
+  const since = new Date(deps.now().getTime() - 60 * 60 * 1000).toISOString();
+  const recent = latest.filter((job) => job.created_at >= since);
+  const images = recent.filter((job) => job.kind === "image").length + parsed.items.filter((item) => item.kind === "image").length;
+  const videos = recent.filter((job) => job.kind === "video").length + parsed.items.filter((item) => item.kind === "video").length;
+  if (images > IMAGE_HOUR) return json(429, { error: "cota_imagem" });
+  if (videos > VIDEO_HOUR) return json(429, { error: "cota_video" });
+  const total = parsed.items.reduce((sum, item) => sum + item.tokens, 0);
+  const charged = await deps.store.adjustTokens({
+    userId: user.id,
+    delta: -total,
+    at: deps.now().toISOString(),
+    reason: "geracao",
+    jobId: null,
+    note: parsed.items.map((item) => item.requested).join(","),
+  });
+  if ("error" in charged) return json(402, { error: "saldo_insuficiente", token_balance: user.token_balance ?? 0 });
+  const jobs = [];
+  try {
+    for (const item of parsed.items) {
+      const now = deps.now().toISOString();
+      const job: Job = {
+        id: newId(),
+        user_id: user.id,
+        status: "queued",
+        stage: "queued",
+        progress: 0,
+        created_at: now,
+        updated_at: now,
+        started_at: null,
+        timeout_seconds: item.kind === "video" ? 900 : 480,
+        prompt: item.prompt,
+        workflow: item.workflow,
+        kind: item.kind,
+        seed: item.seed ?? randomInt(1, 2 ** 47),
+        image_asset_id: item.image_asset_id,
+        video_asset_id: item.video_asset_id,
+        pod_id: null,
+        asset_id: null,
+        error: null,
+        pod_path: null,
+        mode: item.mode,
+        token_cost: item.tokens,
+        tokens_state: "held",
+      };
+      await deps.store.saveJob(job);
+      const delivery = await deps.enqueue(job.id);
+      jobs.push({ ...present(job, deps.now()), delivery });
+    }
+  } catch (error) {
+    await deps.store.adjustTokens({
+      userId: user.id,
+      delta: total,
+      at: deps.now().toISOString(),
+      reason: "estorno",
+      jobId: null,
+      note: "fila_nao_gravou",
+    });
+    throw error;
+  }
+  return json(202, { jobs, poll_after_ms: POLL_AFTER_MS, token_balance: charged.balance });
 }
 
 async function listJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
-  return json(200, { jobs: await deps.store.listJobs(user.id) });
+  const jobs = await deps.store.listJobs(user.id);
+  return json(200, { jobs: jobs.map((job) => present(job, deps.now())), poll_after_ms: POLL_AFTER_MS });
 }
 
 async function getJob(req: AppRequest, deps: Deps, id: string): Promise<AppResponse> {
@@ -265,7 +354,18 @@ async function getJob(req: AppRequest, deps: Deps, id: string): Promise<AppRespo
   if (!user) return json(401, { error: "sem_sessao" });
   const job = await deps.store.findJob(id);
   if (!job || job.user_id !== user.id) return json(404, { error: "nao_encontrado" });
-  return json(200, job);
+  let resultUrl: string | undefined;
+  if (job.status === "done" && job.asset_id) {
+    const asset = await deps.store.findAsset(job.asset_id);
+    if (asset) {
+      try {
+        resultUrl = await deps.signMedia(asset.object_name);
+      } catch {
+        resultUrl = undefined;
+      }
+    }
+  }
+  return json(200, { ...present(job, deps.now()), result_url: resultUrl });
 }
 
 async function runTask(req: AppRequest, deps: Deps): Promise<AppResponse> {
@@ -273,46 +373,274 @@ async function runTask(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (req.headers["x-cloudtasks-queuename"] !== deps.config.tasksQueue) return json(403, { error: "fila_invalida" });
   const jobId = readString(req.body, "jobId");
   const job = jobId ? await deps.store.findJob(jobId) : null;
-  if (!job || job.status === "succeeded") return json(200, { ok: true, ignored: true });
-  const user = await deps.store.findUserById(job.user_id);
+  if (!job || job.status === "done" || job.status === "error" || job.status === "running") return json(200, { ok: true, ignored: true });
+  const pod = (await deps.store.listPods()).find((item) => item.enabled && item.workflows.includes(job.workflow));
+  if (!pod) return failJob(job, deps, "pod_not_configured", true);
+  const claim = await deps.store.claimJob(job.id, pod.id, pod.max_concurrent);
+  if (claim === "busy") return json(503, { error: "pod_ocupado" });
+  if (claim !== "claimed") return json(200, { ok: true, ignored: true });
   job.status = "running";
-  await deps.store.saveJob(job);
+  job.stage = "preparing";
+  job.progress = 15;
+  job.pod_id = pod.id;
+  const user = await deps.store.findUserById(job.user_id);
   try {
-    const result = await deps.runPod({ workflow: job.workflow, prompt: job.prompt, jobId: job.id });
+    const result = await generate(job, pod, deps);
+    job.stage = "saving";
+    job.progress = 95;
+    job.updated_at = deps.now().toISOString();
+    await deps.store.saveJob(job);
     const assetId = newId();
-    const name = objectName(deps.config.mediaPrefix, job.user_id, assetId, extOf(result.contentType));
+    const name = objectName(deps.config.mediaPrefix, job.user_id, job.kind, assetId, extOf(result.contentType, result.podPath));
     await deps.saveMedia(name, result.bytes, result.contentType);
-    await deps.store.saveAsset({
+    const asset: Asset = {
       id: assetId,
       user_id: job.user_id,
       created_at: deps.now().toISOString(),
       object_name: name,
       content_type: result.contentType,
       job_id: job.id,
-    });
-    job.status = "succeeded";
+      kind: job.kind,
+      workflow: job.workflow,
+      prompt: job.prompt,
+      mode: job.mode,
+    };
+    await deps.store.saveAsset(asset);
+    job.status = "done";
+    job.stage = "done";
+    job.progress = 100;
     job.asset_id = assetId;
-    job.pod_id = deps.config.podName;
+    job.pod_path = result.podPath;
     job.error = null;
+    job.tokens_state = "spent";
+    job.updated_at = deps.now().toISOString();
     await deps.store.saveJob(job);
     if (user) {
-      await notify(deps.mailer, {
-        kind: "job_ready",
-        to: user.email,
-        jobId: job.id,
-        link: `${deps.config.publicAppUrl}/jobs/${job.id}`,
-      });
+      try {
+        await notify(deps.mailer, { kind: "job_ready", to: user.email, jobId: job.id, link: `${deps.config.publicAppUrl}/jobs/${job.id}` });
+      } catch {
+        // O arquivo já está no bucket. O aviso não desfaz a geração.
+      }
     }
     return json(200, { ok: true, asset_id: assetId });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "falha";
-    job.status = "failed";
-    job.error = reason;
-    await deps.store.saveJob(job);
-    if (user) await notify(deps.mailer, { kind: "job_failed", to: user.email, jobId: job.id, reason });
-    if (reason === "pod_not_configured") return json(200, { ok: false, error: reason });
-    return json(500, { error: "falha_transitiva" });
+    const reason = safeReason(error);
+    const retry = Number(req.headers["x-cloudtasks-taskretrycount"] || "0");
+    const giveUp = terminal(reason) || retry >= 2;
+    return failJob(job, deps, reason, giveUp, user);
   }
+}
+
+async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
+  const spec = findWorkflow(job.workflow);
+  if (!spec) throw new Error("workflow_invalido");
+  const loaded = loadWorkflow(job.workflow);
+  const token = await deps.readPodToken(pod.token_secret);
+  if (!token) throw new Error("pod_not_configured");
+  let imageName: string | null = null;
+  let videoName: string | null = null;
+  if (job.image_asset_id && loaded.manifest.load_image) {
+    imageName = await uploadAsset(deps, pod, token, job.user_id, job.image_asset_id);
+  }
+  if (job.video_asset_id && loaded.manifest.load_video) {
+    videoName = await uploadAsset(deps, pod, token, job.user_id, job.video_asset_id);
+  }
+  const prompt = patchWorkflow(loaded.prompt, loaded.manifest, {
+    prompt: job.prompt,
+    seed: job.seed,
+    imageName,
+    videoName,
+    disconnectImage: spec.image === "optional" && !job.image_asset_id,
+  });
+  const timeoutMs = (job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds) * 1000;
+  return deps.runPod({
+    baseUrl: pod.base_url,
+    token,
+    prompt,
+    timeoutMs,
+    outputNode: loaded.manifest.output_node,
+    onAccepted: async () => {
+      job.stage = "generating";
+      job.progress = 35;
+      job.started_at = deps.now().toISOString();
+      job.timeout_seconds = job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds;
+      job.updated_at = job.started_at;
+      await deps.store.saveJob(job);
+    },
+  });
+}
+
+async function failJob(job: Job, deps: Deps, reason: string, giveUp: boolean, user?: User | null): Promise<AppResponse> {
+  const account = user === undefined ? await deps.store.findUserById(job.user_id) : user;
+  job.pod_id = null;
+  job.updated_at = deps.now().toISOString();
+  if (!giveUp) {
+    job.status = "queued";
+    job.stage = "queued";
+    job.progress = 0;
+    job.error = null;
+    await deps.store.saveJob(job);
+    return json(503, { error: "falha_transitiva" });
+  }
+  job.status = "error";
+  job.stage = "error";
+  job.error = reason;
+  if (job.tokens_state === "held" && job.token_cost > 0) {
+    const refund = await deps.store.adjustTokens({
+      userId: job.user_id,
+      delta: job.token_cost,
+      at: deps.now().toISOString(),
+      reason: "estorno",
+      jobId: job.id,
+      note: reason,
+    });
+    if (!("error" in refund)) {
+      if (account) account.token_balance = refund.balance;
+      job.tokens_state = "refunded";
+    }
+  }
+  await deps.store.saveJob(job);
+  if (account) {
+    try {
+      await notify(deps.mailer, { kind: "job_failed", to: account.email, jobId: job.id, reason });
+    } catch {
+      // A falha da geração já ficou registrada.
+    }
+  }
+  return json(200, { ok: false, error: reason });
+}
+
+async function uploadAsset(deps: Deps, pod: Pod, token: string, userId: string, assetId: string): Promise<string> {
+  const asset = await deps.store.findAsset(assetId);
+  if (!asset || asset.user_id !== userId) throw new Error("asset_ausente");
+  const bytes = await deps.loadMedia(asset.object_name);
+  const filename = (asset.object_name.split("/").pop() || "entrada.bin").replace(/[^A-Za-z0-9._-]/g, "");
+  return uploadToComfy(pod.base_url, token, bytes, filename);
+}
+
+async function validateAssets(deps: Deps, userId: string, item: Item): Promise<string | null> {
+  if (item.image_asset_id) {
+    const asset = await deps.store.findAsset(item.image_asset_id);
+    if (!asset || asset.user_id !== userId || asset.kind !== "image") return "asset_ausente";
+  }
+  if (item.video_asset_id) {
+    const asset = await deps.store.findAsset(item.video_asset_id);
+    if (!asset || asset.user_id !== userId || asset.kind !== "video") return "asset_ausente";
+  }
+  return null;
+}
+
+function present(job: Job, now: Date) {
+  const progress =
+    job.stage === "generating" && job.started_at
+      ? generatingProgress(Date.parse(job.started_at), now.getTime(), job.timeout_seconds || 480)
+      : job.progress;
+  return {
+    id: job.id,
+    status: job.status,
+    stage: job.stage,
+    stage_label: STAGE_LABEL[job.stage],
+    progress,
+    poll_after_ms: POLL_AFTER_MS,
+    workflow: job.workflow,
+    kind: job.kind,
+    seed: job.seed,
+    prompt: job.prompt,
+    created_at: job.created_at,
+    started_at: job.started_at,
+    timeout_seconds: job.timeout_seconds,
+    asset_id: job.asset_id,
+    pod_path: job.pod_path,
+    error: job.error,
+    mode: job.mode,
+    token_cost: job.token_cost,
+  };
+}
+
+async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {
+  const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const kind = req.query.get("kind");
+  const assets = (await deps.store.listAssets(user.id)).filter((asset) => !kind || asset.kind === kind);
+  const items = [];
+  for (const asset of assets) {
+    let resultUrl: string | undefined;
+    try {
+      resultUrl = await deps.signMedia(asset.object_name);
+    } catch {
+      resultUrl = undefined;
+    }
+    items.push({
+      id: asset.id,
+      kind: asset.kind,
+      workflow: asset.workflow,
+      mode: asset.mode,
+      prompt: asset.prompt,
+      created_at: asset.created_at,
+      job_id: asset.job_id,
+      result_url: resultUrl,
+    });
+  }
+  return json(200, { items });
+}
+
+async function deleteGalleryItem(req: AppRequest, deps: Deps, id: string): Promise<AppResponse> {
+  const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const asset = await deps.store.findAsset(id);
+  if (!asset || asset.user_id !== user.id) return json(404, { error: "nao_encontrado" });
+  await deps.deleteMedia(asset.object_name);
+  await deps.store.deleteAsset(asset.id);
+  return { status: 204, headers: {} };
+}
+
+function parseItems(body: unknown, legacy: boolean): { items: Item[] } | { error: string; status: number } {
+  const raw = readItemList(body, legacy);
+  if (raw.length === 0 || raw.length > MAX_ITEMS) return { error: "dados_invalidos", status: 400 };
+  const items: Item[] = [];
+  for (const entry of raw) {
+    const requested = readString(entry, "workflow") || (legacy ? "zimage_t2i" : "");
+    const choice = resolveChoice(requested);
+    if (!choice) return { error: "workflow_invalido", status: 400 };
+    const spec = choice.spec;
+    const kindField = readString(entry, "kind");
+    if (kindField && kindField !== choice.kind) return { error: "dados_invalidos", status: 400 };
+    const prompt = readString(entry, "prompt");
+    if (prompt.length > 2000 || (spec.prompt === "required" && !prompt)) return { error: "prompt_invalido", status: 400 };
+    const image = readNullable(entry, "image_asset_id");
+    const video = readNullable(entry, "video_asset_id");
+    if (spec.image === "required" && !image) return { error: "asset_ausente", status: 400 };
+    if (spec.video === "required" && !video) return { error: "asset_ausente", status: 400 };
+    items.push({
+      requested: choice.requested,
+      workflow: choice.workflow,
+      mode: choice.mode,
+      tokens: choice.tokens,
+      kind: choice.kind,
+      prompt,
+      seed: readSeed(entry),
+      image_asset_id: image,
+      video_asset_id: video,
+    });
+  }
+  return { items };
+}
+
+function readItemList(body: unknown, legacy: boolean): unknown[] {
+  if (!body || typeof body !== "object") return [];
+  const record = body as Record<string, unknown>;
+  if (Array.isArray(record.items)) return record.items.filter((item) => item && typeof item === "object");
+  if (legacy && (typeof record.prompt === "string" || typeof record.workflow === "string")) return [record];
+  return [];
+}
+
+function terminal(reason: string): boolean {
+  return reason === "pod_not_configured" || reason === "workflow_invalido" || reason === "asset_ausente" || reason.startsWith("comfy_rejeitou");
+}
+
+function safeReason(error: unknown): string {
+  const text = error instanceof Error ? error.message : "falha";
+  return text.replace(/bearer\s+\S+/gi, "bearer").replace(/\s+/g, " ").slice(0, 180);
 }
 
 async function openSession(user: User, deps: Deps): Promise<AppResponse> {
@@ -322,7 +650,7 @@ async function openSession(user: User, deps: Deps): Promise<AppResponse> {
   const token = signSession({ sid: session.id, exp }, deps.config.sessionSecret);
   return {
     status: 200,
-    body: { id: user.id, email: user.email },
+    body: { id: user.id, email: user.email, token_balance: user.token_balance ?? 0 },
     headers: { "set-cookie": sessionCookie(token, deps, 14 * 24 * 60 * 60) },
   };
 }
@@ -354,7 +682,7 @@ function corsHeaders(origin: string, appUrl: string): Record<string, string> {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
     "access-control-allow-headers": "content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
     vary: "Origin",
   };
 }
@@ -369,13 +697,41 @@ function readEmail(body: unknown): string {
   return value.trim().toLowerCase();
 }
 
+type Item = {
+  requested: string;
+  workflow: string;
+  mode: "auto" | "manual";
+  tokens: number;
+  kind: "image" | "video";
+  prompt: string;
+  seed: number | null;
+  image_asset_id: string | null;
+  video_asset_id: string | null;
+};
+
 function readString(body: unknown, key: string): string {
   if (!body || typeof body !== "object" || !(key in body)) return "";
   const value = (body as Record<string, unknown>)[key];
   return typeof value === "string" ? value : "";
 }
 
-function extOf(contentType: string): string {
+function readNullable(body: unknown, key: string): string | null {
+  return readString(body, key) || null;
+}
+
+function readSeed(body: unknown): number | null {
+  if (!body || typeof body !== "object" || !("seed" in body)) return null;
+  const value = (body as Record<string, unknown>).seed;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value >= 2 ** 53) return null;
+  return value;
+}
+
+function extOf(contentType: string, podPath: string): string {
+  const fromName = podPath.split(".").pop()?.toLowerCase() || "";
+  if (fromName === "jpeg") return "jpg";
+  if (["png", "jpg", "webp", "gif", "mp4", "webm"].includes(fromName)) return fromName;
+  if (contentType.includes("mp4")) return "mp4";
+  if (contentType.includes("webm")) return "webm";
   if (contentType.includes("jpeg")) return "jpg";
   if (contentType.includes("webp")) return "webp";
   return "png";

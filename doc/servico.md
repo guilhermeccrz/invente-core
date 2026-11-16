@@ -11,7 +11,8 @@ Copia `.env.example` para `.env` na máquina local. No Cloud Run o valor entra c
 | `RESEND_API_KEY` | Painel do Resend. Vira o segredo `inventa-resend-api-key` quando a chave existir. |
 | `EMAIL_FROM` | Remetente verificado no Resend, no domínio `invente.ai`. |
 | `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` | Client Web no console. Origens `https://invente.ai`, `https://www.invente.ai` e `http://localhost:3000`. Redirect `https://api.invente.ai/v1/auth/google/callback`. |
-| `POD_BASE_URL` e `POD_TOKEN` | Proxy do pod na porta 8188. Os dois juntos. O worker chama `POST {base}/invente/generate`. |
+| `MAIL_FROM` | Remetente verificado no Resend. O código também aceita `EMAIL_FROM`. Valor atual: `Invente.AI <support@invente.ai>`. |
+| `POD_BASE_URL` e `POD_TOKEN` | Só no probe local. No Cloud Run o worker lê a ficha `pods/a6000-sp-1` e o segredo `inventa-pod-a6000-sp-1-token`. |
 | `SESSION_SECRET` | Já existe no Secret Manager. No Cloud Run a referência é `inventa-session-secret:latest`. |
 | `TASKS_WORKER_URL` | O deploy preenche com a URL do worker depois que ele existir. |
 

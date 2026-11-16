@@ -1,0 +1,112 @@
+{
+  "zimage_t2i": {
+    "kind": "image",
+    "prompt": [
+      {
+        "node": "57_27",
+        "input": "text"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "57_3",
+        "input": "seed"
+      }
+    ],
+    "load_image": null,
+    "load_video": null,
+    "output_node": "9"
+  },
+  "flux2_t2i": {
+    "kind": "image",
+    "prompt": [
+      {
+        "node": "68_6",
+        "input": "text"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "68_25",
+        "input": "noise_seed"
+      }
+    ],
+    "load_image": {
+      "node": "46",
+      "input": "image"
+    },
+    "load_video": null,
+    "output_node": "9"
+  },
+  "qwen_image_2_1_t2i": {
+    "kind": "image",
+    "prompt": [
+      {
+        "node": "459_471",
+        "input": "prompt"
+      },
+      {
+        "node": "459_474",
+        "input": "on_false"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "459_458",
+        "input": "seed"
+      },
+      {
+        "node": "459_471",
+        "input": "sampling_mode.seed"
+      }
+    ],
+    "load_image": null,
+    "load_video": null,
+    "output_node": "461"
+  },
+  "minimax_i2v": {
+    "kind": "video",
+    "prompt": [
+      {
+        "node": "105_104",
+        "input": "prompt"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "105_15",
+        "input": "noise_seed"
+      }
+    ],
+    "load_image": {
+      "node": "114",
+      "input": "image"
+    },
+    "load_video": null,
+    "output_node": "92"
+  },
+  "wan_animate": {
+    "kind": "video",
+    "prompt": [
+      {
+        "node": "672_581",
+        "input": "text"
+      }
+    ],
+    "seeds": [
+      {
+        "node": "672_597",
+        "input": "noise_seed"
+      }
+    ],
+    "load_image": {
+      "node": "189",
+      "input": "image"
+    },
+    "load_video": {
+      "node": "240",
+      "input": "file"
+    },
+    "output_node": "246"
+  }
+}

@@ -3,12 +3,42 @@ import { CloudTasksClient } from "@google-cloud/tasks";
 import type { Config } from "../config.js";
 import { assertSafeObjectName } from "../mediaPath.js";
 
-export function mediaSaver(config: Config) {
+function bucketOf(config: Config) {
   const storage = new Storage({ projectId: config.projectId });
-  const bucket = storage.bucket(config.mediaBucket);
+  return storage.bucket(config.mediaBucket);
+}
+
+export function mediaSaver(config: Config) {
+  const bucket = bucketOf(config);
   return async (name: string, bytes: Buffer, contentType: string) => {
     assertSafeObjectName(name, config.mediaPrefix);
     await bucket.file(name).save(bytes, { contentType, resumable: false });
+  };
+}
+
+export function mediaLoader(config: Config) {
+  const bucket = bucketOf(config);
+  return async (name: string) => {
+    assertSafeObjectName(name, config.mediaPrefix);
+    const [bytes] = await bucket.file(name).download();
+    return bytes;
+  };
+}
+
+export function mediaDeleter(config: Config) {
+  const bucket = bucketOf(config);
+  return async (name: string) => {
+    assertSafeObjectName(name, config.mediaPrefix);
+    await bucket.file(name).delete({ ignoreNotFound: true });
+  };
+}
+
+export function mediaSigner(config: Config) {
+  const bucket = bucketOf(config);
+  return async (name: string) => {
+    assertSafeObjectName(name, config.mediaPrefix);
+    const [url] = await bucket.file(name).getSignedUrl({ action: "read", expires: Date.now() + 15 * 60 * 1000 });
+    return url;
   };
 }
 

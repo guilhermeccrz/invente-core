@@ -5,22 +5,38 @@ export type User = {
   google_sub: string | null;
   email_verified: boolean;
   created_at: string;
+  token_balance: number;
 };
 
 export type SessionDoc = { id: string; user_id: string; expires_at: string };
 export type TokenDoc = { id: string; user_id: string; token_hash: string; expires_at: string };
-export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export type JobStatus = "queued" | "running" | "done" | "error";
+export type JobStage = "queued" | "preparing" | "generating" | "saving" | "done" | "error";
+export type MediaKind = "image" | "video";
 
 export type Job = {
   id: string;
   user_id: string;
   status: JobStatus;
+  stage: JobStage;
+  progress: number;
   created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  timeout_seconds: number;
   prompt: string;
   workflow: string;
+  kind: MediaKind;
+  seed: number;
+  image_asset_id: string | null;
+  video_asset_id: string | null;
   pod_id: string | null;
   asset_id: string | null;
   error: string | null;
+  pod_path: string | null;
+  mode: "auto" | "manual";
+  token_cost: number;
+  tokens_state: "held" | "spent" | "refunded";
 };
 
 export type Asset = {
@@ -30,9 +46,37 @@ export type Asset = {
   object_name: string;
   content_type: string;
   job_id: string;
+  kind: MediaKind;
+  workflow: string;
+  prompt: string;
+  mode: "auto" | "manual";
+};
+
+export type TokenReason = "geracao" | "estorno" | "credito_manual";
+
+export type TokenAdjustment = {
+  userId: string;
+  delta: number;
+  at: string;
+  reason: TokenReason;
+  jobId: string | null;
+  note: string;
+};
+
+export type Pod = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  base_url: string;
+  token_secret: string;
+  max_concurrent: number;
+  workflows: string[];
+  image_timeout_seconds: number;
+  video_timeout_seconds: number;
 };
 
 export type TokenKind = "email_verify" | "password_reset";
+export type Claim = "claimed" | "busy" | "skip" | "missing";
 
 export type Store = {
   findUserByEmail(email: string): Promise<User | null>;
@@ -50,6 +94,13 @@ export type Store = {
   findJob(id: string): Promise<Job | null>;
   listJobs(userId: string): Promise<Job[]>;
   saveAsset(asset: Asset): Promise<void>;
+  findAsset(id: string): Promise<Asset | null>;
+  listAssets(userId: string): Promise<Asset[]>;
+  deleteAsset(id: string): Promise<void>;
+  adjustTokens(input: TokenAdjustment): Promise<{ balance: number } | { error: "insuficiente" | "ausente" }>;
+  savePod(pod: Pod): Promise<void>;
+  listPods(): Promise<Pod[]>;
+  claimJob(jobId: string, podId: string, maxConcurrent: number): Promise<Claim>;
 };
 
 export function memoryStore(): Store {
@@ -58,6 +109,7 @@ export function memoryStore(): Store {
   const tokens: Record<TokenKind, TokenDoc[]> = { email_verify: [], password_reset: [] };
   const jobs: Job[] = [];
   const assets: Asset[] = [];
+  const pods: Pod[] = [];
   return {
     async findUserByEmail(email) {
       return users.find((user) => user.email === email) ?? null;
@@ -106,10 +158,50 @@ export function memoryStore(): Store {
       return jobs.find((job) => job.id === id) ?? null;
     },
     async listJobs(userId) {
-      return jobs.filter((job) => job.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+      return jobs.filter((job) => job.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 80);
     },
     async saveAsset(asset) {
-      assets.push(asset);
+      const index = assets.findIndex((item) => item.id === asset.id);
+      if (index >= 0) assets[index] = asset;
+      else assets.push(asset);
+    },
+    async findAsset(id) {
+      return assets.find((asset) => asset.id === id) ?? null;
+    },
+    async listAssets(userId) {
+      return assets.filter((asset) => asset.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 60);
+    },
+    async deleteAsset(id) {
+      const index = assets.findIndex((asset) => asset.id === id);
+      if (index >= 0) assets.splice(index, 1);
+    },
+    async adjustTokens(input) {
+      const user = users.find((item) => item.id === input.userId);
+      if (!user) return { error: "ausente" };
+      const balance = user.token_balance ?? 0;
+      if (input.delta < 0 && balance + input.delta < 0) return { error: "insuficiente" };
+      user.token_balance = balance + input.delta;
+      return { balance: user.token_balance };
+    },
+    async savePod(pod) {
+      const index = pods.findIndex((item) => item.id === pod.id);
+      if (index >= 0) pods[index] = pod;
+      else pods.push(pod);
+    },
+    async listPods() {
+      return pods.map((pod) => ({ ...pod, workflows: [...pod.workflows] }));
+    },
+    async claimJob(jobId, podId, maxConcurrent) {
+      const job = jobs.find((item) => item.id === jobId);
+      if (!job) return "missing";
+      if (job.status !== "queued") return "skip";
+      const running = jobs.filter((item) => item.pod_id === podId && item.status === "running").length;
+      if (running >= maxConcurrent) return "busy";
+      job.status = "running";
+      job.stage = "preparing";
+      job.progress = 15;
+      job.pod_id = podId;
+      return "claimed";
     },
   };
 }

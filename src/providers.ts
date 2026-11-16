@@ -25,21 +25,3 @@ export async function exchangeGoogleCode(config: Config, code: string): Promise<
   return { sub: profile.sub, email: profile.email };
 }
 
-export async function runPod(config: Config, input: { workflow: string; prompt: string; jobId: string }) {
-  if (!config.podBaseUrl || !config.podToken) throw new Error("pod_not_configured");
-  const response = await fetch(`${config.podBaseUrl}/invente/generate`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.podToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ workflow: input.workflow, prompt: input.prompt, job_id: input.jobId }),
-  });
-  if (!response.ok) throw new Error("pod_indisponivel");
-  const payload = (await response.json()) as { image_base64?: string; content_type?: string };
-  if (!payload.image_base64) throw new Error("pod_sem_imagem");
-  return {
-    bytes: Buffer.from(payload.image_base64, "base64"),
-    contentType: payload.content_type || "image/png",
-  };
-}
