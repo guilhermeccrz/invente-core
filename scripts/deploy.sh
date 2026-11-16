@@ -31,7 +31,7 @@ gcloud run deploy inventa-worker \
   --max-instances=2 \
   --memory=512Mi \
   --cpu=1 \
-  --timeout=1200 \
+  --timeout=1800 \
   --concurrency=1 \
   --no-allow-unauthenticated \
   --set-env-vars="${COMMON}|ROLE=worker" \

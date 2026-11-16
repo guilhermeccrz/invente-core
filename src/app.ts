@@ -50,7 +50,7 @@ export type Deps = {
   store: Store;
   mailer: Mailer;
   now: () => Date;
-  enqueue: (jobId: string) => Promise<"sent" | "skipped">;
+  enqueue: (jobId: string, delaySeconds?: number) => Promise<"sent" | "skipped">;
   runPod: (input: PodRun) => Promise<PodResult>;
   readPodToken: (secretName: string) => Promise<string>;
   loadMedia: (name: string) => Promise<Buffer>;
@@ -379,7 +379,10 @@ async function runTask(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const pod = (await deps.store.listPods()).find((item) => item.enabled && item.workflows.includes(job.workflow));
   if (!pod) return failJob(job, deps, "pod_not_configured", true);
   const claim = await deps.store.claimJob(job.id, pod.id, pod.max_concurrent);
-  if (claim === "busy") return json(503, { error: "pod_ocupado" });
+  if (claim === "busy") {
+    await deps.enqueue(job.id, 30);
+    return json(200, { ok: true, delayed: true });
+  }
   if (claim !== "claimed") return json(200, { ok: true, ignored: true });
   job.status = "running";
   job.stage = "preparing";
@@ -641,7 +644,7 @@ function readItemList(body: unknown, legacy: boolean): unknown[] {
 }
 
 function terminal(reason: string): boolean {
-  return reason === "pod_not_configured" || reason === "workflow_invalido" || reason === "asset_ausente" || reason.startsWith("comfy_rejeitou");
+  return reason === "pod_not_configured" || reason === "workflow_invalido" || reason === "asset_ausente" || reason.startsWith("comfy_rejeitou") || reason.startsWith("comfy_timeout");
 }
 
 function safeReason(error: unknown): string {

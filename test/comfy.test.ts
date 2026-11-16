@@ -81,3 +81,33 @@ test("cliente espera o history e devolve o caminho no pod", async () => {
   assert.equal(result.contentType, "image/png");
   assert.deepEqual(sleeps, [4000, 4000]);
 });
+
+test("timeout interrompe so o prompt que estourou", async () => {
+  let body = "";
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+    const href = String(url);
+    if (href.endsWith("/prompt")) return new Response(JSON.stringify({ prompt_id: "p9" }), { status: 200 });
+    if (href.endsWith("/interrupt")) {
+      body = String(init?.body || "");
+      return new Response("ok", { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  await assert.rejects(
+    () =>
+      executeComfy({
+        baseUrl: "https://pod.example",
+        token: "segredo",
+        prompt: { "9": { class_type: "SaveImage", inputs: {} } },
+        timeoutMs: 3000,
+        fetchImpl,
+        sleep: async () => undefined,
+        now: (() => {
+          let clock = 0;
+          return () => (clock += 2000);
+        })(),
+      }),
+    /comfy_timeout/,
+  );
+  assert.equal(body, JSON.stringify({ prompt_id: "p9" }));
+});

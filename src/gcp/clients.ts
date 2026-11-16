@@ -44,12 +44,14 @@ export function mediaSigner(config: Config) {
 
 export function taskEnqueuer(config: Config) {
   const client = new CloudTasksClient();
-  return async (jobId: string): Promise<"sent" | "skipped"> => {
+  return async (jobId: string, delaySeconds = 0): Promise<"sent" | "skipped"> => {
     if (!config.tasksWorkerUrl || !config.projectId) return "skipped";
     const parent = client.queuePath(config.projectId, config.tasksLocation, config.tasksQueue);
+    const scheduleTime = delaySeconds > 0 ? { seconds: Math.floor(Date.now() / 1000) + delaySeconds } : undefined;
     await client.createTask({
       parent,
       task: {
+        scheduleTime,
         httpRequest: {
           httpMethod: "POST",
           url: config.tasksWorkerUrl,

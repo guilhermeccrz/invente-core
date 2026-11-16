@@ -75,7 +75,17 @@ export async function executeComfy(input: PodRun & { fetchImpl?: FetchLike; slee
     const file = pickFile(entry?.outputs, input.outputNode);
     if (file && (entry?.status?.completed || entry?.status?.status_str === "success")) return download(base, input.token, file, fetchImpl);
   }
+  await stopPrompt(base, input.token, queued.prompt_id, fetchImpl);
   throw new Error("comfy_timeout");
+}
+
+async function stopPrompt(base: string, token: string, promptId: string, fetchImpl: FetchLike): Promise<void> {
+  await fetchImpl(`${base}/interrupt`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ prompt_id: promptId }),
+    signal: AbortSignal.timeout(15_000),
+  }).catch(() => undefined);
 }
 
 async function download(base: string, token: string, file: ComfyFile, fetchImpl: FetchLike): Promise<PodResult> {
