@@ -100,6 +100,7 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/me") return me(req, deps);
   if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
   if (method === "GET" && path === "/v1/gallery") return listGallery(req, deps);
+  if (method === "GET" && path === "/v1/community") return listCommunity(deps);
   if (method === "POST" && path.startsWith("/v1/gallery/") && path.endsWith("/restore")) return restoreGalleryItem(req, deps, path.slice("/v1/gallery/".length, -"/restore".length));
   if (method === "POST" && path === "/v1/assets") return uploadReference(req, deps);
   if (method === "GET" && path.startsWith("/v1/media/")) return readMedia(req, deps, path.slice("/v1/media/".length));
@@ -594,6 +595,28 @@ function present(job: Job, now: Date) {
     token_cost: job.token_cost,
     media_path: job.asset_id ? `/v1/media/${job.asset_id}` : null,
   };
+}
+
+async function listCommunity(deps: Deps): Promise<AppResponse> {
+  const assets = await deps.store.listRecentImages(3);
+  const items = [];
+  for (const asset of assets) {
+    let resultUrl: string | undefined;
+    try {
+      resultUrl = await deps.signMedia(asset.object_name);
+    } catch {
+      resultUrl = undefined;
+    }
+    if (!resultUrl) continue;
+    items.push({
+      id: asset.id,
+      kind: asset.kind,
+      prompt: asset.prompt,
+      created_at: asset.created_at,
+      result_url: resultUrl,
+    });
+  }
+  return json(200, { items });
 }
 
 async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {

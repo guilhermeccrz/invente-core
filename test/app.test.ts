@@ -509,6 +509,32 @@ test("flux sem foto entra na mesma maquina e nao vira outro modelo na lista", as
   assert.equal(prompted.some((node) => node.class_type === "UNETLoader"), true);
 });
 
+test("a home mostra as tres imagens mais novas de qualquer conta", async () => {
+  const deps = makeDeps();
+  const base = {
+    user_id: "pessoa",
+    content_type: "image/png",
+    job_id: "job",
+    kind: "image" as const,
+    workflow: "zimage_t2i",
+    mode: "manual" as const,
+    prompt: "cena",
+  };
+  await deps.store.saveAsset({ ...base, id: "velha", created_at: "2026-11-01T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/velha.png" });
+  await deps.store.saveAsset({ ...base, id: "um", created_at: "2026-11-16T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/um.png", prompt: "um" });
+  await deps.store.saveAsset({ ...base, id: "dois", user_id: "outra", created_at: "2026-11-17T00:00:00.000Z", object_name: "invente.ai/users/outra/images/dois.png", prompt: "dois" });
+  await deps.store.saveAsset({ ...base, id: "tres", created_at: "2026-11-18T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/tres.png", prompt: "tres" });
+  await deps.store.saveAsset({ ...base, id: "quatro", created_at: "2026-11-19T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/quatro.png", prompt: "quatro" });
+  await deps.store.saveAsset({ ...base, id: "video", kind: "video", created_at: "2026-11-20T00:00:00.000Z", object_name: "invente.ai/users/pessoa/videos/video.mp4" });
+  await deps.store.saveAsset({ ...base, id: "ref", workflow: "referencia", created_at: "2026-11-21T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/ref.png" });
+  await deps.store.saveAsset({ ...base, id: "lixo", created_at: "2026-11-22T00:00:00.000Z", deleted_at: "2026-11-22T00:00:00.000Z", object_name: "invente.ai/users/pessoa/images/lixo.png" });
+  const response = await handle({ method: "GET", path: "/v1/community", query: new URLSearchParams(), headers: {}, body: undefined, cookies: {} }, deps);
+  assert.equal(response.status, 200);
+  const items = (response.body as { items: { id: string; result_url: string }[] }).items;
+  assert.deepEqual(items.map((item) => item.id), ["quatro", "tres", "dois"]);
+  assert.match(items[0].result_url, /signed\.example/);
+});
+
 function post(path: string, body: unknown) {
   return { method: "POST", path, query: new URLSearchParams(), headers: {}, body, cookies: {} };
 }

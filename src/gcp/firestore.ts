@@ -68,6 +68,13 @@ export function firestoreStore(projectId: string): Store {
       const snap = await assets.where("user_id", "==", userId).orderBy("created_at", "desc").limit(60).get();
       return snap.docs.map((doc) => doc.data() as Asset);
     },
+    async listRecentImages(limit) {
+      const snap = await assets.orderBy("created_at", "desc").limit(40).get();
+      return snap.docs
+        .map((doc) => doc.data() as Asset)
+        .filter((asset) => asset.kind === "image" && !asset.deleted_at && asset.workflow !== "referencia")
+        .slice(0, limit);
+    },
     async listExpiredAssets(beforeIso) {
       const snap = await assets.where("deleted_at", "<=", beforeIso).limit(200).get();
       return snap.docs.map((doc) => doc.data() as Asset);

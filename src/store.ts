@@ -99,6 +99,7 @@ export type Store = {
   saveAsset(asset: Asset): Promise<void>;
   findAsset(id: string): Promise<Asset | null>;
   listAssets(userId: string): Promise<Asset[]>;
+  listRecentImages(limit: number): Promise<Asset[]>;
   listExpiredAssets(beforeIso: string): Promise<Asset[]>;
   deleteAsset(id: string): Promise<void>;
   adjustTokens(input: TokenAdjustment): Promise<{ balance: number } | { error: "insuficiente" | "ausente" }>;
@@ -174,6 +175,12 @@ export function memoryStore(): Store {
     },
     async listAssets(userId) {
       return assets.filter((asset) => asset.user_id === userId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 60);
+    },
+    async listRecentImages(limit) {
+      return assets
+        .filter((asset) => asset.kind === "image" && !asset.deleted_at && asset.workflow !== "referencia")
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+        .slice(0, limit);
     },
     async listExpiredAssets(beforeIso) {
       return assets.filter((asset) => asset.deleted_at && asset.deleted_at <= beforeIso);
