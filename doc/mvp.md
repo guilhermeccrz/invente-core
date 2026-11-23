@@ -4,7 +4,7 @@ Este texto registra o que o serviço `invente-core` faz agora, por que cada esco
 
 ## O que entrou
 
-- O worker fala com o ComfyUI do pod `a6000-sp-1` (`https://yx0pr60l7cmv48-8188.proxy.runpod.net`), com os cinco fluxos exportados em `workflows/`.
+- O worker fala com o ComfyUI do pod `a6000-sp-1` (`https://vbslo326z16d35-1111.proxy.runpod.net`), com os cinco fluxos exportados em `workflows/`.
 - `POST /v1/generate` devolve o job na hora. O cliente consulta `GET /v1/jobs/{id}` a cada 4 segundos (`poll_after_ms`). Enquanto o estágio é `generating`, o percentual sobe com o tempo até 90 e só vai a 100 quando o arquivo existe. Não há websocket: cada consulta é uma leitura, e o worker não grava o Firestore a cada segundo.
 - O saldo é `users.token_balance`. Cada geração debita na entrada da fila. Se a tentativa termina em erro, o valor volta. O extrato fica em `token_ledger`.
 - A galeria é `GET /v1/gallery` e `DELETE /v1/gallery/{id}`. O delete apaga o documento e o objeto debaixo de `invente.ai/`. A URL assinada dura 15 minutos.

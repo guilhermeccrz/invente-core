@@ -82,7 +82,7 @@ Os e-mails (confirmar conta, redefinir senha, geração pronta, geração falhou
 
 ## Pod
 
-A ficha é `pods/a6000-sp-1`: `base_url` `https://yx0pr60l7cmv48-8188.proxy.runpod.net`, `token_secret` `inventa-pod-a6000-sp-1-token`, `max_concurrent` 1, timeouts 480 s e 900 s. O token não entra em variável de ambiente nem no git. Os grafos em formato de API estão em `workflows/`.
+A ficha é `pods/a6000-sp-1`: `base_url` `https://vbslo326z16d35-1111.proxy.runpod.net`, `token_secret` `inventa-pod-a6000-sp-1-token`, `max_concurrent` 1, timeouts 480 s e 900 s. O token não entra em variável de ambiente nem no git. Os grafos em formato de API estão em `workflows/`.
 
 Sem a ficha, ou sem o segredo, o job termina em `pod_not_configured` e o débito volta.
 
