@@ -101,6 +101,7 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/workflows") return listWorkflows(deps);
   if (method === "GET" && path === "/v1/gallery") return listGallery(req, deps);
   if (method === "GET" && path === "/v1/community") return listCommunity(deps);
+  if (method === "GET" && path.startsWith("/v1/community/")) return readCommunityImage(deps, path.slice("/v1/community/".length));
   if (method === "POST" && path.startsWith("/v1/gallery/") && path.endsWith("/restore")) return restoreGalleryItem(req, deps, path.slice("/v1/gallery/".length, -"/restore".length));
   if (method === "POST" && path === "/v1/assets") return uploadReference(req, deps);
   if (method === "GET" && path.startsWith("/v1/media/")) return readMedia(req, deps, path.slice("/v1/media/".length));
@@ -599,24 +600,27 @@ function present(job: Job, now: Date) {
 
 async function listCommunity(deps: Deps): Promise<AppResponse> {
   const assets = await deps.store.listRecentImages(3);
-  const items = [];
-  for (const asset of assets) {
-    let resultUrl: string | undefined;
-    try {
-      resultUrl = await deps.signMedia(asset.object_name);
-    } catch {
-      resultUrl = undefined;
-    }
-    if (!resultUrl) continue;
-    items.push({
+  return json(200, {
+    items: assets.map((asset) => ({
       id: asset.id,
       kind: asset.kind,
       prompt: asset.prompt,
       created_at: asset.created_at,
-      result_url: resultUrl,
-    });
-  }
-  return json(200, { items });
+      result_url: `/v1/community/${asset.id}`,
+    })),
+  });
+}
+
+async function readCommunityImage(deps: Deps, id: string): Promise<AppResponse> {
+  const asset = await deps.store.findAsset(id);
+  const recent = await deps.store.listRecentImages(3);
+  if (!asset || !recent.some((item) => item.id === asset.id)) return json(404, { error: "nao_encontrado" });
+  const bytes = await deps.loadMedia(asset.object_name);
+  return {
+    status: 200,
+    headers: { "content-type": asset.content_type || "image/png", "cache-control": "public, max-age=300" },
+    raw: bytes,
+  };
 }
 
 async function listGallery(req: AppRequest, deps: Deps): Promise<AppResponse> {

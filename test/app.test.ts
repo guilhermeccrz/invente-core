@@ -532,7 +532,11 @@ test("a home mostra as tres imagens mais novas de qualquer conta", async () => {
   assert.equal(response.status, 200);
   const items = (response.body as { items: { id: string; result_url: string }[] }).items;
   assert.deepEqual(items.map((item) => item.id), ["quatro", "tres", "dois"]);
-  assert.match(items[0].result_url, /signed\.example/);
+  assert.equal(items[0].result_url, "/v1/community/quatro");
+  const image = await handle({ method: "GET", path: "/v1/community/quatro", query: new URLSearchParams(), headers: {}, body: undefined, cookies: {} }, deps);
+  assert.equal(image.status, 200);
+  const hidden = await handle({ method: "GET", path: "/v1/community/velha", query: new URLSearchParams(), headers: {}, body: undefined, cookies: {} }, deps);
+  assert.equal(hidden.status, 404);
 });
 
 function post(path: string, body: unknown) {
