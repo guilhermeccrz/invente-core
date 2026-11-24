@@ -20,7 +20,7 @@ if gcloud secrets describe inventa-google-client-id --project "${PROJECT}" >/dev
   SECRETS="${SECRETS},GOOGLE_CLIENT_ID=inventa-google-client-id:latest,GOOGLE_CLIENT_SECRET=inventa-google-client-secret:latest"
 fi
 
-COMMON="^|^GOOGLE_CLOUD_PROJECT=${PROJECT}|PUBLIC_API_URL=https://api.invente.ai|PUBLIC_APP_URL=https://invente.ai|MEDIA_BUCKET=${BUCKET}|MEDIA_PREFIX=invente.ai/|TASKS_LOCATION=${REGION}|TASKS_QUEUE=inventa-jobs|TASKS_INVOKER_EMAIL=${SA}|DATA_BACKEND=firestore|EMAIL_FROM=Invente <nao-responda@invente.ai>"
+COMMON="^|^GOOGLE_CLOUD_PROJECT=${PROJECT}|PUBLIC_API_URL=https://api.invente.ai|PUBLIC_APP_URL=https://invente.ai|MEDIA_BUCKET=${BUCKET}|MEDIA_PREFIX=invente.ai/|TASKS_LOCATION=${REGION}|TASKS_QUEUE=inventa-jobs|TASKS_INVOKER_EMAIL=${SA}|DATA_BACKEND=firestore|POD_USD_PER_HOUR=0.70|TOKEN_USD=0.001|TOKEN_MARGIN=1.5|EMAIL_FROM=Invente.AI <support@invente.ai>|MAIL_FROM=Invente.AI <support@invente.ai>"
 
 gcloud run deploy inventa-worker \
   --image "${IMAGE}" \
@@ -31,7 +31,7 @@ gcloud run deploy inventa-worker \
   --max-instances=2 \
   --memory=512Mi \
   --cpu=1 \
-  --timeout=900 \
+  --timeout=1800 \
   --concurrency=1 \
   --no-allow-unauthenticated \
   --set-env-vars="${COMMON}|ROLE=worker" \

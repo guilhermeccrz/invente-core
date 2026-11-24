@@ -20,6 +20,7 @@ test("swagger descreve a API e entrega a interface", async () => {
   assert.equal(spec.status, 200);
   assert.equal(body.openapi, "3.0.3");
   assert.ok(body.paths["/v1/jobs"]);
+  assert.ok(body.paths["/v1/generate"]);
   assert.ok(body.paths["/v1/auth/register"]);
   const page = await handle(get("/docs"), deps);
   assert.equal(page.status, 200);
