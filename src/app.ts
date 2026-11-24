@@ -7,7 +7,7 @@ import { EmailNotConfigured, notify, type Mailer } from "./email/notify.js";
 import { objectName } from "./mediaPath.js";
 import { hashPassword, verifyPassword } from "./password.js";
 import { POLL_AFTER_MS, generatingProgress } from "./progress.js";
-import { hashToken, newId, newToken, readSession, signSession } from "./session.js";
+import { hashToken, newId, newToken, readSession, readUpload, signSession, signUpload } from "./session.js";
 import { docsHtml, openApiSpec } from "./openapi.js";
 import type { Asset, Job, JobStage, Pod, Store, User } from "./store.js";
 import { swaggerFile } from "./swagger.js";
@@ -103,6 +103,7 @@ async function route(req: AppRequest, deps: Deps): Promise<AppResponse> {
   if (method === "GET" && path === "/v1/community") return listCommunity(deps);
   if (method === "GET" && path.startsWith("/v1/community/")) return readCommunityImage(deps, path.slice("/v1/community/".length));
   if (method === "POST" && path.startsWith("/v1/gallery/") && path.endsWith("/restore")) return restoreGalleryItem(req, deps, path.slice("/v1/gallery/".length, -"/restore".length));
+  if (method === "POST" && path === "/v1/assets/grant") return uploadGrant(req, deps);
   if (method === "POST" && path === "/v1/assets") return uploadReference(req, deps);
   if (method === "GET" && path.startsWith("/v1/media/")) return readMedia(req, deps, path.slice("/v1/media/".length));
   if (method === "DELETE" && path.startsWith("/v1/gallery/")) return deleteGalleryItem(req, deps, path.slice("/v1/gallery/".length));
@@ -799,7 +800,8 @@ function sessionCookie(token: string, req: AppRequest, deps: Deps, maxAge: numbe
   return `invente_session=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure ? "; Secure" : ""}`;
 }
 
-const UPLOAD_LIMIT = 12 * 1024 * 1024;
+const IMAGE_UPLOAD_LIMIT = 5 * 1024 * 1024;
+const VIDEO_UPLOAD_LIMIT = 12 * 1024 * 1024;
 const UPLOAD_TYPES: Record<string, { kind: "image" | "video"; ext: string }> = {
   "image/png": { kind: "image", ext: "png" },
   "image/jpeg": { kind: "image", ext: "jpg" },
@@ -808,8 +810,26 @@ const UPLOAD_TYPES: Record<string, { kind: "image" | "video"; ext: string }> = {
   "video/webm": { kind: "video", ext: "webm" },
 };
 
-async function uploadReference(req: AppRequest, deps: Deps): Promise<AppResponse> {
+async function uploadGrant(req: AppRequest, deps: Deps): Promise<AppResponse> {
   const user = await currentUser(req, deps);
+  if (!user) return json(401, { error: "sem_sessao" });
+  const exp = deps.now().getTime() + 10 * 60 * 1000;
+  return json(200, { token: signUpload(user.id, deps.config.sessionSecret, exp) });
+}
+
+async function userForUpload(req: AppRequest, deps: Deps): Promise<User | null> {
+  const header = req.headers.authorization || "";
+  const match = header.match(/^Bearer\s+(\S+)/i);
+  if (match) {
+    const payload = readUpload(match[1], deps.config.sessionSecret, deps.now().getTime());
+    if (!payload) return null;
+    return deps.store.findUserById(payload.uid);
+  }
+  return currentUser(req, deps);
+}
+
+async function uploadReference(req: AppRequest, deps: Deps): Promise<AppResponse> {
+  const user = await userForUpload(req, deps);
   if (!user) return json(401, { error: "sem_sessao" });
   const record = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
   const declared = typeof record.content_type === "string" ? record.content_type : "";
@@ -823,7 +843,8 @@ async function uploadReference(req: AppRequest, deps: Deps): Promise<AppResponse
   } catch {
     return json(400, { error: "dados_invalidos" });
   }
-  if (bytes.length === 0 || bytes.length > UPLOAD_LIMIT) return json(400, { error: "dados_invalidos" });
+  const limit = spec.kind === "image" ? IMAGE_UPLOAD_LIMIT : VIDEO_UPLOAD_LIMIT;
+  if (bytes.length === 0 || bytes.length > limit) return json(400, { error: "arquivo_grande" });
   const assetId = newId();
   const name = objectName(deps.config.mediaPrefix, user.id, spec.kind, assetId, spec.ext);
   await deps.saveMedia(name, bytes, declared);
@@ -861,7 +882,7 @@ function corsHeaders(origin: string, appUrl: string): Record<string, string> {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
-    "access-control-allow-headers": "content-type",
+    "access-control-allow-headers": "content-type, authorization",
     "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
     vary: "Origin",
   };

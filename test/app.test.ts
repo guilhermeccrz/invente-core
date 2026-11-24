@@ -331,6 +331,36 @@ test("referencia fica no bucket do usuario e so ele le", async () => {
     cookies: {},
   }, deps);
   assert.equal(local.headers["set-cookie"]?.includes("Secure"), false);
+  const grant = await handle({
+    method: "POST",
+    path: "/v1/assets/grant",
+    query: new URLSearchParams(),
+    headers: { origin: "https://invente.ai" },
+    body: undefined,
+    cookies,
+  }, deps);
+  assert.equal(grant.status, 200);
+  assert.match(grant.headers["access-control-allow-headers"] || "", /authorization/);
+  const uploadToken = (grant.body as { token: string }).token;
+  const direct = await handle({
+    ...post("/v1/assets", { kind: "image", content_type: "image/png", data_base64: png.toString("base64") }),
+    headers: { authorization: `Bearer ${uploadToken}`, origin: "https://invente.ai" },
+    cookies: {},
+  }, deps);
+  assert.equal(direct.status, 201);
+  const forged = await handle({
+    ...post("/v1/assets", { kind: "image", content_type: "image/png", data_base64: png.toString("base64") }),
+    headers: { authorization: `Bearer ${cookies.invente_session}` },
+    cookies: {},
+  }, deps);
+  assert.equal(forged.status, 401);
+  const heavy = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+  const tooBig = await handle({
+    ...post("/v1/assets", { kind: "image", content_type: "image/jpeg", data_base64: heavy.toString("base64") }),
+    cookies,
+  }, deps);
+  assert.equal(tooBig.status, 400);
+  assert.equal((tooBig.body as { error: string }).error, "arquivo_grande");
 });
 
 test("apagar vai para a lixeira e some depois de dois dias", async () => {
