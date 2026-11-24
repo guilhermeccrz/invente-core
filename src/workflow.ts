@@ -52,7 +52,7 @@ export function allowedFrame(width: number, height: number): boolean {
   return IMAGE_FRAMES.some((frame) => frame.width === width && frame.height === height);
 }
 
-export const MINIMAX_SECONDS = [4, 5, 6, 8, 10] as const;
+export const MINIMAX_SECONDS = [4, 5, 6, 8, 10, 15] as const;
 
 export const MINIMAX_ASPECTS = [
   { id: "1:1 (Square)", label: "1:1" },
