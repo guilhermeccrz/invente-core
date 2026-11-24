@@ -52,6 +52,61 @@ export function allowedFrame(width: number, height: number): boolean {
   return IMAGE_FRAMES.some((frame) => frame.width === width && frame.height === height);
 }
 
+export const MINIMAX_SECONDS = [4, 5, 6, 8, 10] as const;
+
+export const MINIMAX_ASPECTS = [
+  { id: "1:1 (Square)", label: "1:1" },
+  { id: "16:9 (Widescreen)", label: "16:9" },
+  { id: "9:16 (Portrait Widescreen)", label: "9:16" },
+  { id: "4:3 (Standard)", label: "4:3" },
+  { id: "3:4 (Portrait Standard)", label: "3:4" },
+  { id: "3:2 (Photo)", label: "3:2" },
+  { id: "2:3 (Portrait Photo)", label: "2:3" },
+  { id: "21:9 (Ultrawide)", label: "21:9" },
+] as const;
+
+export function minimaxSettings() {
+  return {
+    seconds: [...MINIMAX_SECONDS],
+    default_seconds: 5,
+    aspects: MINIMAX_ASPECTS.map((item) => ({ id: item.id, label: item.label })),
+    default_aspect: "1:1 (Square)",
+  };
+}
+
+export function allowedMinimaxSeconds(value: number): boolean {
+  return (MINIMAX_SECONDS as readonly number[]).includes(value);
+}
+
+export function allowedMinimaxAspect(value: string): boolean {
+  return MINIMAX_ASPECTS.some((item) => item.id === value);
+}
+
+/** A foto de referência entra no tamanho que o seletor de proporção calculou. Sem isso o MiniMax recusa o primeiro quadro. */
+export function applyMinimaxSettings(
+  prompt: ComfyPrompt,
+  input: { seconds: number; aspect: string; scaleReference: boolean },
+): void {
+  const duration = prompt["105_111"];
+  const resolution = prompt["115"];
+  const model = prompt["105_104"];
+  if (!duration || !resolution || !model) throw new Error("workflow_invalido");
+  duration.inputs.value = input.seconds;
+  resolution.inputs.aspect_ratio = input.aspect;
+  if (!input.scaleReference) return;
+  prompt.ref_scale = {
+    class_type: "ImageScale",
+    inputs: {
+      image: ["114", 0],
+      upscale_method: "lanczos",
+      width: ["115", 0],
+      height: ["115", 1],
+      crop: "center",
+    },
+  };
+  model.inputs.first_frame = ["ref_scale", 0];
+}
+
 export function applyFrameSize(prompt: ComfyPrompt, workflowId: string, width: number, height: number): void {
   const targets = FRAME_NODES[workflowId];
   if (!targets) return;

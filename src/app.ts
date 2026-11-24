@@ -11,7 +11,7 @@ import { hashToken, newId, newToken, readSession, signSession } from "./session.
 import { docsHtml, openApiSpec } from "./openapi.js";
 import type { Asset, Job, JobStage, Pod, Store, User } from "./store.js";
 import { swaggerFile } from "./swagger.js";
-import { applyFrameSize, allowedFrame, IMAGE_FRAMES, patchWorkflow } from "./workflow.js";
+import { applyFrameSize, applyMinimaxSettings, allowedFrame, allowedMinimaxAspect, allowedMinimaxSeconds, IMAGE_FRAMES, patchWorkflow } from "./workflow.js";
 
 const ALLOWED_ORIGINS = new Set(["https://invente.ai", "https://www.invente.ai", "http://localhost:3000"]);
 const MAX_ITEMS = 4;
@@ -343,6 +343,8 @@ async function createJobs(req: AppRequest, deps: Deps): Promise<AppResponse> {
         video_asset_id: item.video_asset_id,
         width: item.width,
         height: item.height,
+        duration_seconds: item.duration_seconds,
+        aspect_ratio: item.aspect_ratio,
         pod_id: null,
         asset_id: null,
         error: null,
@@ -492,6 +494,13 @@ async function generate(job: Job, pod: Pod, deps: Deps): Promise<PodResult> {
     disconnectImage: spec.drops_image === true && !job.image_asset_id,
   });
   if (job.width && job.height) applyFrameSize(prompt, graph, job.width, job.height);
+  if (graph === "minimax_i2v") {
+    applyMinimaxSettings(prompt, {
+      seconds: job.duration_seconds || 5,
+      aspect: job.aspect_ratio || "1:1 (Square)",
+      scaleReference: Boolean(imageName),
+    });
+  }
   const timeoutMs = (job.kind === "video" ? pod.video_timeout_seconds : pod.image_timeout_seconds) * 1000;
   return deps.runPod({
     baseUrl: pod.base_url,
@@ -713,7 +722,9 @@ function parseItems(body: unknown, legacy: boolean, rates: Rates): { items: Item
     const frame = readFrame(entry);
     if (frame === "invalid") return { error: "dados_invalidos", status: 400 };
     const count = readCount(entry);
-    if (count === null) return { error: "dados_invalidos", status: 400 };
+    if (count === null || (choice.kind === "video" && count > 1)) return { error: "dados_invalidos", status: 400 };
+    const options = readVideoOptions(entry, choice.workflow);
+    if (options === "invalid") return { error: "dados_invalidos", status: 400 };
     const seed = readSeed(entry);
     for (let index = 0; index < count; index += 1) {
       items.push({
@@ -728,6 +739,8 @@ function parseItems(body: unknown, legacy: boolean, rates: Rates): { items: Item
         video_asset_id: video,
         width: frame?.width ?? null,
         height: frame?.height ?? null,
+        duration_seconds: options.seconds,
+        aspect_ratio: options.aspect,
       });
     }
   }
@@ -876,6 +889,8 @@ type Item = {
   video_asset_id: string | null;
   width: number | null;
   height: number | null;
+  duration_seconds: number | null;
+  aspect_ratio: string | null;
 };
 
 function readString(body: unknown, key: string): string {
@@ -898,10 +913,26 @@ function readCount(body: unknown): number | null {
 function readFrame(body: unknown): { width: number; height: number } | null | "invalid" {
   if (!body || typeof body !== "object") return null;
   const record = body as Record<string, unknown>;
-  if (record.width === undefined && record.height === undefined) return null;
+  if (record.width == null && record.height == null) return null;
   if (typeof record.width !== "number" || typeof record.height !== "number") return "invalid";
   if (!allowedFrame(record.width, record.height)) return "invalid";
   return { width: record.width, height: record.height };
+}
+
+function readVideoOptions(body: unknown, workflow: string): { seconds: number | null; aspect: string | null } | "invalid" {
+  if (!body || typeof body !== "object") return { seconds: null, aspect: null };
+  const record = body as Record<string, unknown>;
+  const sentSeconds = record.duration_seconds != null;
+  const sentAspect = typeof record.aspect_ratio === "string" && record.aspect_ratio.length > 0;
+  if (workflow !== "minimax_i2v") {
+    if (sentSeconds || sentAspect) return "invalid";
+    return { seconds: null, aspect: null };
+  }
+  const seconds = sentSeconds ? record.duration_seconds : 5;
+  const aspect = sentAspect ? record.aspect_ratio : "1:1 (Square)";
+  if (typeof seconds !== "number" || !Number.isInteger(seconds) || !allowedMinimaxSeconds(seconds)) return "invalid";
+  if (typeof aspect !== "string" || !allowedMinimaxAspect(aspect)) return "invalid";
+  return { seconds, aspect };
 }
 
 function readSeed(body: unknown): number | null {

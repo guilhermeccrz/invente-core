@@ -32,6 +32,8 @@ export type Job = {
   video_asset_id: string | null;
   width: number | null;
   height: number | null;
+  duration_seconds?: number | null;
+  aspect_ratio?: string | null;
   pod_id: string | null;
   asset_id: string | null;
   error: string | null;

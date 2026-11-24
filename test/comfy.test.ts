@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { executeComfy } from "../src/comfy.js";
 import { generatingProgress } from "../src/progress.js";
-import { applyFrameSize, patchWorkflow, type WorkflowManifest } from "../src/workflow.js";
+import { applyFrameSize, applyMinimaxSettings, patchWorkflow, type WorkflowManifest } from "../src/workflow.js";
 import { executionWorkflow, loadWorkflow } from "../src/catalog.js";
 
 test("progresso sobe com o tempo e para em 90", () => {
@@ -51,6 +51,32 @@ test("flux sem imagem usa o grafo de texto e com imagem usa o de referencia", ()
   const edit = loadWorkflow("flux2_t2i");
   assert.equal(edit.prompt["46"].class_type, "LoadImage");
   assert.equal(edit.prompt["98_12"], undefined);
+});
+
+test("minimax guarda segundos e proporcao e escala a foto de referencia", () => {
+  const loaded = loadWorkflow("minimax_i2v");
+  const withImage = patchWorkflow(loaded.prompt, loaded.manifest, {
+    prompt: "um barco",
+    seed: 7,
+    imageName: "foto.png",
+  });
+  applyMinimaxSettings(withImage, { seconds: 8, aspect: "16:9 (Widescreen)", scaleReference: true });
+  assert.equal(withImage["105_111"].inputs.value, 8);
+  assert.equal(withImage["115"].inputs.aspect_ratio, "16:9 (Widescreen)");
+  assert.equal(withImage["114"].inputs.image, "foto.png");
+  assert.deepEqual(withImage["105_104"].inputs.first_frame, ["ref_scale", 0]);
+  assert.deepEqual(withImage.ref_scale.inputs.width, ["115", 0]);
+  assert.deepEqual(withImage.ref_scale.inputs.height, ["115", 1]);
+
+  const textOnly = patchWorkflow(structuredClone(loaded.prompt), loaded.manifest, {
+    prompt: "um barco",
+    seed: 7,
+    disconnectImage: true,
+  });
+  applyMinimaxSettings(textOnly, { seconds: 5, aspect: "1:1 (Square)", scaleReference: false });
+  assert.equal(textOnly["114"], undefined);
+  assert.equal(textOnly["105_104"].inputs.first_frame, undefined);
+  assert.equal(textOnly.ref_scale, undefined);
 });
 
 test("dimensao escolhida entra no latent do flux e do zimage", () => {

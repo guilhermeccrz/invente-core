@@ -1,5 +1,6 @@
 import type { CatalogItem, MediaKind } from "./catalog.js";
 import { findWorkflow } from "./catalog.js";
+import { minimaxSettings } from "./workflow.js";
 
 /** USD por hora do pod. Hoje a A6000 sai a 0,70. Troca com POD_USD_PER_HOUR. */
 export const DEFAULT_POD_USD_PER_HOUR = 0.7;
@@ -72,6 +73,7 @@ export type Quote = {
   gpu_usd: number;
   market_usd: number;
   needs: { prompt: CatalogItem["prompt"]; image: CatalogItem["image"]; video: CatalogItem["video"] };
+  settings?: ReturnType<typeof minimaxSettings>;
 };
 
 export type ResolvedChoice = {
@@ -124,6 +126,7 @@ export function quoteModel(id: ModelId, rates: Rates = defaultRates()): Quote {
     gpu_usd: gpu,
     market_usd: market,
     needs: { prompt: spec.prompt, image: spec.image, video: spec.video },
+    settings: id === "minimax_i2v" ? minimaxSettings() : undefined,
   };
 }
 
@@ -147,6 +150,7 @@ export function quoteAuto(kind: MediaKind, rates: Rates = defaultRates()): Quote
     gpu_usd: gpuUsd(seconds, rates),
     market_usd: money(mean(ids.map((id) => MARKET_USD[id]))),
     needs: { prompt: spec.prompt, image: spec.image, video: spec.video },
+    settings: runs === "minimax_i2v" ? minimaxSettings() : undefined,
   };
 }
 
